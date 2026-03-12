@@ -3,14 +3,6 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
-<meta name="theme-color" content="#0a0a0a"/>
-<meta name="apple-mobile-web-app-capable" content="yes"/>
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
-<meta name="apple-mobile-web-app-title" content="Iron Log"/>
-<meta name="mobile-web-app-capable" content="yes"/>
-<meta name="description" content="Il tuo diario di allenamento personale"/>
-<link rel="manifest" href="manifest.json"/>
-<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230a0a0a'/><text y='.9em' font-size='72' x='50%' text-anchor='middle'>⚡</text></svg>"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <meta name="apple-mobile-web-app-title" content="Iron Log"/>
@@ -33,7 +25,7 @@ self.addEventListener('message',e=>{if(e.data&&e.data.type==='NOTIFY'){try{self.
   }catch(_){}
 }
 </script>
-
+<link rel="manifest" href="data:application/json,%7B%22name%22%3A%22Iron%20Log%22%2C%22short_name%22%3A%22Iron%20Log%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230a0a0a%22%2C%22theme_color%22%3A%22%23ef4444%22%7D"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -194,7 +186,7 @@ function calcFaticaIndex(sessions){
   const tsb=ctl>0?Math.round((atl/ctl-1)*100):0; // positivo=overreaching, negativo=fresco
   return{atl:Math.round(atl),ctl:Math.round(ctl),tsb,status:tsb>40?"OVERREACHING":tsb>15?"CARICO ALTO":tsb>-10?"OTTIMALE":tsb>-25?"FRESCO":"DETRAINING"};
 }
-function getMonthlyStats(sessions,nutrEntries,tdeeEntries){
+function getMonthlyStats(sessions,nutrEntries,tdeeEntries,actEntries){
   const months={};
   sessions.forEach(s=>{
     const m=s.date.slice(0,7);
@@ -203,6 +195,16 @@ function getMonthlyStats(sessions,nutrEntries,tdeeEntries){
     months[m].volume+=sessionVol(s);
     months[m].duration+=s.duration||0;
     months[m].kcalBurned+=s.kcal||0;
+  });
+  // aggiungi kcal attività extra per mese
+  Object.entries(actEntries||{}).forEach(([date,acts])=>{
+    const m=date.slice(0,7);
+    if(!months[m])months[m]={sessions:0,volume:0,duration:0,kcalBurned:0,prs:0};
+    if(!months[m].actKcal)months[m].actKcal=0;
+    if(!months[m].actMin)months[m].actMin=0;
+    months[m].actKcal+=acts.reduce((t,a)=>t+(a.kcal||0),0);
+    months[m].actMin+=acts.reduce((t,a)=>t+(a.min||0),0);
+    months[m].kcalBurned+=acts.reduce((t,a)=>t+(a.kcal||0),0);
   });
   // aggiungi kcal nutrizione per mese
   Object.entries(nutrEntries||{}).forEach(([date,n])=>{
@@ -1001,7 +1003,7 @@ function MuscleChart({sessions,C}){
 }
 
 // ── ANNUAL HEATMAP ──
-function HeatmapChart({sessions,C}){
+function HeatmapChart({sessions,actEntries,C}){
   const today=new Date();
   const cells=[];
   for(let i=363;i>=0;i--){
@@ -1010,6 +1012,9 @@ function HeatmapChart({sessions,C}){
   }
   const countMap={};
   sessions.forEach(s=>{countMap[s.date]=(countMap[s.date]||0)+1;});
+  // include activities
+  const actMap={};
+  Object.entries(actEntries||{}).forEach(([d,acts])=>{if(acts.length)actMap[d]=acts.length;});
   const maxCount=Math.max(...Object.values(countMap),1);
   // group by week column
   const weeks=[];
@@ -1038,10 +1043,13 @@ function HeatmapChart({sessions,C}){
                 {Array.from({length:7}).map((_,di)=>{
                   const cell=wk.find(c=>(c.day===0?6:c.day-1)===di);
                   const cnt=cell?countMap[cell.iso]||0:0;
+                  const haActs=cell?actMap[cell.iso]||0:0;
                   const alpha=cnt===0?0.06:0.15+(cnt/maxCount)*0.85;
                   const isToday=cell?.iso===today.toISOString().slice(0,10);
+                  // colore: rosso per palestra, verde per solo attività
+                  const bg=cnt>0?`rgba(239,68,68,${alpha})`:haActs>0?`rgba(16,185,129,0.4)`:C.bg4;
                   return(
-                    <div key={di} title={cell?`${cell.iso}: ${cnt} sessioni`:""} style={{width:sz,height:sz,borderRadius:2,background:cnt>0?`rgba(239,68,68,${alpha})`:C.bg4,border:isToday?`1px solid #ef4444`:"1px solid transparent"}}/>
+                    <div key={di} title={cell?`${cell.iso}: ${cnt} sessioni${haActs?" + "+haActs+" attività":""}`:""} style={{width:sz,height:sz,borderRadius:2,background:bg,border:isToday?`1px solid #ef4444`:"1px solid transparent"}}/>
                   );
                 })}
               </div>
@@ -1049,11 +1057,13 @@ function HeatmapChart({sessions,C}){
           </div>
         </div>
       </div>
-      <div style={{display:"flex",gap:4,alignItems:"center",marginTop:6}}>
+      <div style={{display:"flex",gap:8,alignItems:"center",marginTop:6,flexWrap:"wrap"}}>
         <span style={{fontSize:7,color:C.text3}}>0</span>
         {[0.1,0.35,0.6,0.85].map((a,i)=><div key={i} style={{width:8,height:8,borderRadius:2,background:`rgba(239,68,68,${a})`}}/>)}
-        <span style={{fontSize:7,color:C.text3}}>{maxCount}+</span>
-        <span style={{fontSize:7,color:C.text3,marginLeft:"auto"}}>{sessions.length} sessioni · {Object.keys(countMap).length} giorni attivi</span>
+        <span style={{fontSize:7,color:C.text3}}>gym</span>
+        <div style={{width:8,height:8,borderRadius:2,background:"rgba(16,185,129,0.4)"}}/>
+        <span style={{fontSize:7,color:C.text3}}>attività</span>
+        <span style={{fontSize:7,color:C.text3,marginLeft:"auto"}}>{sessions.length} sessioni · {Object.keys(actMap).length} gg att.</span>
       </div>
     </div>
   );
@@ -1249,7 +1259,10 @@ function ConsistencyBar({sessions,C}){
 }
 
 
-function WeekCalendar({sessions,program,C,offset,setOffset}){
+const ACT_COLORS={"Palestra":"#ef4444","Corsa":"#10b981","Tennis":"#f59e0b","Calcetto":"#22c55e","Padel":"#06b6d4","Nuoto":"#3b82f6","Ciclismo":"#f97316","Camminata":"#84cc16","HIIT":"#ec4899","Yoga":"#8b5cf6","Altro":"#6b7280"};
+const ACT_ICONS={"Palestra":"🏋","Corsa":"🏃","Tennis":"🎾","Calcetto":"⚽","Padel":"🏸","Nuoto":"🏊","Ciclismo":"🚴","Camminata":"🚶","HIIT":"⚡","Yoga":"🧘","Altro":"🏅"};
+
+function WeekCalendar({sessions,program,actEntries,C,offset,setOffset}){
   const days=getWeekDays(offset);
   const today=todayISO();
   const sessMap={};
@@ -1258,9 +1271,17 @@ function WeekCalendar({sessions,program,C,offset,setOffset}){
   const dayColorMap={};
   (program?.days||[]).forEach((d,i)=>{dayColorMap[d.name]=d.color||DAY_COLORS[i%DAY_COLORS.length];});
   const dl=["L","M","M","G","V","S","D"];
-  const wkSess=sessions.filter(s=>s.date>=days[0].toISOString().slice(0,10)&&s.date<=days[6].toISOString().slice(0,10));
+  const d0=days[0].toISOString().slice(0,10);
+  const d6=days[6].toISOString().slice(0,10);
+  const wkSess=sessions.filter(s=>s.date>=d0&&s.date<=d6);
   const wkVol=Math.round(wkSess.reduce((t,s)=>t+sessionVol(s),0));
-  const wkKcal=wkSess.reduce((t,s)=>t+(s.kcal||0),0);
+  const wkKcalGym=wkSess.reduce((t,s)=>t+(s.kcal||0),0);
+  // attività extra della settimana
+  const wkActEntries=Object.entries(actEntries||{}).filter(([d])=>d>=d0&&d<=d6);
+  const wkActKcal=wkActEntries.reduce((t,[,acts])=>t+acts.reduce((s,a)=>s+(a.kcal||0),0),0);
+  const wkActMin=wkActEntries.reduce((t,[,acts])=>t+acts.reduce((s,a)=>s+(a.min||0),0),0);
+  const wkKcal=wkKcalGym+wkActKcal;
+  const wkActivities=wkActEntries.reduce((t,[,acts])=>t+acts.length,0);
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -1272,25 +1293,45 @@ function WeekCalendar({sessions,program,C,offset,setOffset}){
         {days.map((d,i)=>{
           const ds=d.toISOString().slice(0,10);
           const daySess=sessMap[ds]||[];
+          const dayActs=actEntries?.[ds]||[];
           const trained=daySess.length>0;
+          const hasActs=dayActs.length>0;
           const isToday=ds===today;
           const dotColor=trained?(dayColorMap[daySess[0].dayName]||"#ef4444"):null;
           return(
-            <div key={i} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+            <div key={i} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
               <span style={{fontSize:8,color:C.text3,letterSpacing:1}}>{dl[i]}</span>
               <div style={{width:36,height:36,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:dotColor||(isToday?C.bg4:"transparent"),border:isToday&&!trained?`2px solid #ef4444`:"2px solid transparent",fontSize:12,fontWeight:trained||isToday?700:400,color:trained?"#fff":isToday?"#ef4444":C.text2}}>
                 {d.getDate()}
               </div>
-              {trained&&<div style={{display:"flex",gap:2}}>{daySess.slice(0,2).map((s,j)=><div key={j} style={{width:5,height:5,borderRadius:"50%",background:dayColorMap[s.dayName]||"#ef4444"}}/>)}</div>}
+              {/* pallini palestra */}
+              {trained&&<div style={{display:"flex",gap:2,justifyContent:"center"}}>{daySess.slice(0,2).map((s,j)=><div key={j} style={{width:5,height:5,borderRadius:"50%",background:dayColorMap[s.dayName]||"#ef4444"}}/>)}</div>}
+              {/* icone attività extra */}
+              {hasActs&&<div style={{display:"flex",flexWrap:"wrap",gap:1,justifyContent:"center",maxWidth:36}}>
+                {dayActs.slice(0,3).map((a,j)=>(
+                  <span key={j} style={{fontSize:9,lineHeight:1}} title={`${a.type}${a.min?" · "+a.min+"min":""}`}>{ACT_ICONS[a.type]||"🏅"}</span>
+                ))}
+              </div>}
+              {!trained&&!hasActs&&<div style={{height:8}}/>}
             </div>
           );
         })}
       </div>
-      <div style={{display:"flex",gap:14,marginTop:10,borderTop:`1px solid ${C.border}`,paddingTop:8}}>
+      <div style={{display:"flex",gap:10,marginTop:10,borderTop:`1px solid ${C.border}`,paddingTop:8,flexWrap:"wrap"}}>
         <div><p style={{margin:0,fontSize:8,color:C.text3}}>SESSIONI</p><p style={{margin:0,fontSize:16,fontWeight:900,color:"#ef4444"}}>{wkSess.length}</p></div>
+        {wkActivities>0&&<div><p style={{margin:0,fontSize:8,color:C.text3}}>ATTIVITÀ</p><p style={{margin:0,fontSize:16,fontWeight:900,color:"#10b981"}}>{wkActivities}</p></div>}
         {wkVol>0&&<div><p style={{margin:0,fontSize:8,color:C.text3}}>VOLUME</p><p style={{margin:0,fontSize:16,fontWeight:900,color:C.text}}>{wkVol>=1000?`${(wkVol/1000).toFixed(1)}t`:`${wkVol}kg`}</p></div>}
-        {wkKcal>0&&<div><p style={{margin:0,fontSize:8,color:C.text3}}>KCAL BRUCIATE</p><p style={{margin:0,fontSize:16,fontWeight:900,color:"#f97316"}}>{wkKcal}</p></div>}
+        {wkActMin>0&&<div><p style={{margin:0,fontSize:8,color:C.text3}}>MIN ATT.</p><p style={{margin:0,fontSize:16,fontWeight:900,color:"#06b6d4"}}>{wkActMin}</p></div>}
+        {wkKcal>0&&<div><p style={{margin:0,fontSize:8,color:C.text3}}>KCAL TOT.</p><p style={{margin:0,fontSize:16,fontWeight:900,color:"#f97316"}}>{wkKcal}</p></div>}
       </div>
+      {/* legenda */}
+      {wkActivities>0&&(
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:6}}>
+          {[...new Set(wkActEntries.flatMap(([,acts])=>acts.map(a=>a.type)))].map(t=>(
+            <span key={t} style={{fontSize:8,color:C.text3}}>{ACT_ICONS[t]||"🏅"} {t}</span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1366,8 +1407,75 @@ function ExerciseRow({name,sessions,goal,onGoalChange,records,C,S}){
   );
 }
 
+// ── SESSION EDIT MODAL ──
+function SessionEditModal({session,onSave,onClose,C,S}){
+  const [exercises,setExercises]=useState(()=>session.exercises.map(e=>({...e})));
+  const [dur,setDur]=useState(session.duration||0);
+  const [kcal,setKcal]=useState(session.kcal||0);
+  const [note,setNote]=useState(session.note||"");
+  const update=(i,field,val)=>{
+    setExercises(exs=>exs.map((e,j)=>j===i?{...e,[field]:val}:e));
+  };
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:9000,display:"flex",flexDirection:"column",background:C.bg}}>
+      <div style={{...S.hdr,position:"relative"}}>
+        <h1 style={S.logo}>✏ MODIFICA</h1>
+        <div style={{display:"flex",gap:8}}>
+          <button style={S.btn("ghost")} onClick={onClose}>Annulla</button>
+          <button style={S.btn("red")} onClick={()=>onSave({...session,exercises,duration:+dur||0,kcal:+kcal||0,note})}>💾 Salva</button>
+        </div>
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:"12px 14px"}}>
+        <p style={{fontSize:12,fontWeight:700,color:C.text,margin:"0 0 4px"}}>{session.dayName} — {session.date}</p>
+        {/* Durata e kcal */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+          <div><label style={S.lbl}>⏱ Durata (min)</label><input type="number" inputMode="numeric" style={S.inp} value={dur} onChange={e=>setDur(e.target.value)}/></div>
+          <div><label style={S.lbl}>🔥 Kcal</label><input type="number" inputMode="numeric" style={S.inp} value={kcal} onChange={e=>setKcal(e.target.value)}/></div>
+        </div>
+        <div style={{marginBottom:12}}>
+          <label style={S.lbl}>📝 Note</label>
+          <input style={S.inp} value={note} onChange={e=>setNote(e.target.value)} placeholder="Note allenamento..."/>
+        </div>
+        <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 8px"}}>ESERCIZI ({exercises.length})</p>
+        {exercises.map((ex,i)=>(
+          <div key={i} style={{...S.card,marginBottom:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+              <span style={S.tag(ex.muscle)}>{ex.muscle}</span>
+              <span style={{fontSize:13,fontWeight:700,color:C.text}}>{ex.name}</span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+              <div>
+                <label style={S.lbl}>Peso (kg)</label>
+                <input type="number" inputMode="decimal" step="0.5" style={{...S.inp,textAlign:"center",fontSize:18,fontWeight:900}} value={ex.weight??""} onChange={e=>update(i,"weight",parseFloat(e.target.value)||0)}/>
+              </div>
+              <div>
+                <label style={S.lbl}>Rip.</label>
+                <input type="number" inputMode="numeric" style={{...S.inp,textAlign:"center",fontSize:18,fontWeight:900}} value={ex.reps??""} onChange={e=>update(i,"reps",parseInt(e.target.value)||0)}/>
+              </div>
+              <div>
+                <label style={S.lbl}>Serie</label>
+                <input type="number" inputMode="numeric" style={{...S.inp,textAlign:"center",fontSize:18,fontWeight:900}} value={ex.sets??1} onChange={e=>update(i,"sets",parseInt(e.target.value)||1)}/>
+              </div>
+            </div>
+            <div style={{marginTop:8}}>
+              <label style={S.lbl}>Difficoltà</label>
+              <div style={{display:"flex",gap:4}}>
+                {[1,2,3,4,5].map(v=>(
+                  <button key={v} onClick={()=>update(i,"score",v)} style={{flex:1,padding:"6px 2px",borderRadius:6,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"inherit",border:`2px solid ${ex.score===v?SCORE_COLORS[v]:C.border2}`,background:ex.score===v?SCORE_COLORS[v]+"22":C.bg3,color:ex.score===v?SCORE_COLORS[v]:C.text3}}>
+                    {v}<br/><span style={{fontWeight:400,fontSize:7}}>{SCORE_LABELS[v]}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── WEEK GROUP SESSIONS ──
-function WeekGroup({weekKey,weekSessions,program,onDeleteSession,C,S}){
+function WeekGroup({weekKey,weekSessions,program,onDeleteSession,onEditSession,C,S}){
   const [open,setOpen]=useState(false);
   const dayColorMap={};(program?.days||[]).forEach((d,i)=>{dayColorMap[d.name]=d.color||DAY_COLORS[i%DAY_COLORS.length];});
   const vol=Math.round(weekSessions.reduce((t,s)=>t+sessionVol(s),0));
@@ -1408,6 +1516,7 @@ function WeekGroup({weekKey,weekSessions,program,onDeleteSession,C,S}){
               </div>
               <div style={{display:"flex",gap:8,alignItems:"flex-start",flexShrink:0}}>
                 <span style={{fontSize:10,color:"#ef4444",fontWeight:700}}>{sv>=1000?`${(sv/1000).toFixed(1)}t`:`${sv}kg`}</span>
+                {onEditSession&&<button onClick={()=>onEditSession(s)} style={{background:"none",border:"none",color:C.text3,cursor:"pointer",fontSize:15,padding:"0 2px",lineHeight:1}} title="Modifica">✏</button>}
                 {onDeleteSession&&<button onClick={()=>{if(window.confirm("Eliminare questo allenamento?"))onDeleteSession(s.id);}} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:16,padding:"0 2px",lineHeight:1}}>🗑</button>}
               </div>
             </div>
@@ -2305,8 +2414,8 @@ function FaticaCard({sessions,C,S}){
 // ══════════════════════════════════════════════
 // ── MONTHLY COMPARE ──
 // ══════════════════════════════════════════════
-function MonthlyCompare({sessions,nutrEntries,tdeeEntries,C,S}){
-  const months=getMonthlyStats(sessions,nutrEntries,tdeeEntries);
+function MonthlyCompare({sessions,nutrEntries,tdeeEntries,actEntries,C,S}){
+  const months=getMonthlyStats(sessions,nutrEntries,tdeeEntries,actEntries);
   if(months.length<2)return null;
   const monthNames=["Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
   const maxVol=Math.max(...months.map(([,v])=>v.volume),1);
@@ -2937,7 +3046,7 @@ function AnalisiPanel({sessions,bwEntries,actEntries,nutrEntries,tdeeEntries,rec
         <div>
           <FaticaCard sessions={sessions} C={C} S={S}/>
           <FFMIPanel bwEntries={bwEntries} C={C} S={S}/>
-          <MonthlyCompare sessions={sessions} nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} C={C} S={S}/>
+          <MonthlyCompare sessions={sessions} nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} actEntries={actEntries} C={C} S={S}/>
           <div style={S.card}>
             <p style={{margin:"0 0 12px",fontSize:9,letterSpacing:2,color:C.text3}}>🍎 NUTRIZIONE AVANZATA</p>
             <NutrNerdDash nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} bwEntries={bwEntries} sessions={sessions} C={C} S={S}/>
@@ -3577,6 +3686,7 @@ function GymTracker(){
   const [tdeeEntries,setTdeeEntries]=useState({});
   const [bwEntries,setBwEntries]=useState([]);
   const [calOffset,setCalOffset]=useState(0);
+  const [editingSession,setEditingSession]=useState(null);
   const sessionsRef=useRef([]);
 
   const updateSessions=(val)=>{sessionsRef.current=val;setSessions(val);};
@@ -3676,6 +3786,18 @@ function GymTracker(){
     updateSessions(updated);
     setActiveDay(null);setLogData({});setWorkoutStart(null);
     notify("Allenamento salvato! 🔥");setView("workout");
+  };
+
+  const saveEditedSession=(updated)=>{
+    const newSessions=sessions.map(s=>s.id===updated.id?updated:s);
+    updateSessions(newSessions);db(SESS_KEY,newSessions);
+    setEditingSession(null);notify("Allenamento modificato ✓");
+  };
+
+  const deleteSession=(id)=>{
+    const newSessions=sessions.filter(s=>s.id!==id);
+    updateSessions(newSessions);db(SESS_KEY,newSessions);
+    notify("Allenamento eliminato","#ef4444");
   };
 
   const C=makeC(null,themePrefs.mode);const density=DENSITY_MODES[themePrefs.density]||DENSITY_MODES.normal;const S=makeS(C,density);
@@ -3844,7 +3966,6 @@ function GymTracker(){
 
     const HistoryInner=()=>{
       const [htab,setHtab]=useState("grafici");
-      const [period,setPeriod]=useState("all");
       const htabs=[["profilo","👤"],["analisi","🧬"],["grafici","📈"],["esercizi","🏋"],["log","📋"]];
       return(
         <div>
@@ -3880,67 +4001,26 @@ function GymTracker(){
           )}
 
           {/* ── GRAFICI ── */}
-          {htab==="grafici"&&(()=>{
-            const PERIODS=[["1m","1 Mese",30],["3m","3 Mesi",90],["6m","6 Mesi",180],["1y","1 Anno",365],["all","Tutto",null]];
-            const cutoff=PERIODS.find(p=>p[0]===period)?.[2];
-            const filtSess=cutoff?sessions.filter(s=>(Date.now()-new Date(s.date))/86400000<=cutoff):sessions;
-            const fTotMins=filtSess.reduce((t,s)=>t+(s.duration||0),0);
-            const fTotKcal=filtSess.reduce((t,s)=>t+(s.kcal||0),0);
-            const fWithDur=filtSess.filter(s=>s.duration>0);
-            const fAvgDur=fWithDur.length?Math.round(fTotMins/fWithDur.length):0;
-            const fWkGroups=groupByWeek(filtSess);
-            const fThisW=(fWkGroups[0]||[null,[]])[1].reduce((t,s)=>t+sessionVol(s),0);
-            const fLastW=(fWkGroups[1]||[null,[]])[1].reduce((t,s)=>t+sessionVol(s),0);
-            const fWkDelta=fLastW>0?Math.round((fThisW-fLastW)/fLastW*100):null;
-            return(
-              <div className="fade-up">
-                {/* Period selector */}
-                <div style={{display:"flex",gap:4,marginBottom:12,background:C.bg3,borderRadius:10,padding:4}}>
-                  {PERIODS.map(([k,l])=>(
-                    <button key={k} onClick={()=>setPeriod(k)}
-                      style={{flex:1,padding:"7px 2px",borderRadius:7,border:"none",fontFamily:"inherit",cursor:"pointer",
-                        background:period===k?C.acc:"transparent",
-                        color:period===k?"#fff":C.text3,
-                        fontSize:9,fontWeight:period===k?700:400,transition:"all 0.15s",letterSpacing:0.3}}>
-                      {l}
-                    </button>
-                  ))}
-                </div>
-                {/* Stats bar */}
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:10}}>
-                  {[["⏱ TEMPO",fmtDur(fTotMins)],["🔥 KCAL",fTotKcal?fTotKcal.toLocaleString():"—"],["⌀ DURATA",fmtDur(fAvgDur)]].map(([l,v])=>(
-                    <div key={l} style={{...S.card,textAlign:"center",padding:"9px 4px",marginBottom:0}}>
-                      <p style={{margin:"0 0 1px",fontSize:7,color:C.text3,letterSpacing:1}}>{l}</p>
-                      <p style={{margin:0,fontSize:12,fontWeight:900,color:C.text}}>{v}</p>
-                    </div>
-                  ))}
-                </div>
-                <div style={{...S.card,display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                  <div>
-                    <p style={{margin:"0 0 1px",fontSize:9,color:C.text3}}>Sessioni nel periodo</p>
-                    <p style={{margin:0,fontSize:7,color:C.text4}}>{period==="all"?"Tutti i dati":"Ultimi "+PERIODS.find(p=>p[0]===period)?.[1]}</p>
-                  </div>
-                  <div style={{textAlign:"right"}}>
-                    <span style={{fontSize:22,fontWeight:900,color:C.acc}}>{filtSess.length}</span>
-                    {fWkDelta!==null&&<p style={{margin:"2px 0 0",fontSize:9,fontWeight:700,color:fWkDelta>=0?"#10b981":"#ef4444"}}>{fWkDelta>=0?"+":""}{fWkDelta}% vol.</p>}
-                  </div>
-                </div>
-                {filtSess.length===0&&(
-                  <div style={{...S.card,textAlign:"center",padding:"30px 16px"}}>
-                    <p style={{fontSize:24,margin:"0 0 8px"}}>📭</p>
-                    <p style={{fontSize:11,color:C.text3}}>Nessuna sessione nel periodo selezionato.</p>
-                  </div>
-                )}
-                <div style={S.card}><WeekCalendar sessions={sessions} program={program} C={C} offset={calOffset} setOffset={setCalOffset}/></div>
-                {filtSess.length>=2&&<div style={S.card}><VolumeChart sessions={filtSess} C={C}/></div>}
-                {filtSess.length>=4&&<div style={S.card}><MuscleVolumeMatrix sessions={filtSess} C={C}/></div>}
-                {filtSess.length>=4&&<div style={S.card}><ConsistencyBar sessions={filtSess} C={C}/></div>}
-                {filtSess.length>=3&&<div style={S.card}><MuscleChart sessions={filtSess} C={C}/></div>}
-                {filtSess.length>=4&&<div style={S.card}><RadarChart sessions={filtSess} C={C}/></div>}
-                {filtSess.length>=7&&<div style={S.card}><HeatmapChart sessions={filtSess} C={C}/></div>}
+          {htab==="grafici"&&(
+            <div className="fade-up">
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:10}}>
+                {[["⏱ TEMPO",fmtDur(totMins)],["🔥 KCAL",totKcal?totKcal.toLocaleString():"—"],["⌀ DURATA",fmtDur(avgDur)]].map(([l,v])=>(
+                  <div key={l} style={{...S.card,textAlign:"center",padding:"9px 4px",marginBottom:0}}><p style={{margin:"0 0 1px",fontSize:7,color:C.text3,letterSpacing:1}}>{l}</p><p style={{margin:0,fontSize:12,fontWeight:900,color:C.text}}>{v}</p></div>
+                ))}
               </div>
-            );
-          })()}
+              {wkDelta!==null&&<div style={{...S.card,display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <p style={{margin:0,fontSize:10,color:C.text2}}>Volume sett. corrente vs scorsa</p>
+                <span style={{fontSize:20,fontWeight:900,color:wkDelta>=0?"#10b981":"#ef4444"}}>{wkDelta>=0?"+":""}{wkDelta}%</span>
+              </div>}
+              <div style={S.card}><WeekCalendar sessions={sessions} program={program} actEntries={actEntries} C={C} offset={calOffset} setOffset={setCalOffset}/></div>
+              {sessions.length>=2&&<div style={S.card}><VolumeChart sessions={sessions} C={C}/></div>}
+              {sessions.length>=4&&<div style={S.card}><MuscleVolumeMatrix sessions={sessions} C={C}/></div>}
+              {sessions.length>=4&&<div style={S.card}><ConsistencyBar sessions={sessions} C={C}/></div>}
+              {sessions.length>=3&&<div style={S.card}><MuscleChart sessions={sessions} C={C}/></div>}
+              {sessions.length>=4&&<div style={S.card}><RadarChart sessions={sessions} C={C}/></div>}
+              {sessions.length>=7&&<div style={S.card}><HeatmapChart sessions={sessions} actEntries={actEntries} C={C}/></div>}
+            </div>
+          )}
 
           {/* ── ESERCIZI ── */}
           {htab==="esercizi"&&(
@@ -3975,7 +4055,7 @@ function GymTracker(){
               {/* Sessioni */}
               <h2 style={S.h2}>SESSIONI PER SETTIMANA</h2>
               {!sessions.length&&<p style={{color:C.text4,textAlign:"center",fontSize:12,padding:"20px 0"}}>Nessuna sessione ancora</p>}
-              {weekGroups.map(([wk,wkS])=><WeekGroup key={wk} weekKey={wk} weekSessions={wkS} program={program} onDeleteSession={(id)=>{const u=sessions.filter(s=>s.id!==id);updateSessions(u);db(SESS_KEY,u);}} C={C} S={S}/>)}
+              {weekGroups.map(([wk,wkS])=><WeekGroup key={wk} weekKey={wk} weekSessions={wkS} program={program} onDeleteSession={deleteSession} onEditSession={setEditingSession} C={C} S={S}/>)}
             </div>
           )}
         </div>
@@ -3984,6 +4064,7 @@ function GymTracker(){
 
     return(
       <div style={S.app}><Toast/>
+        {editingSession&&<SessionEditModal session={editingSession} onSave={saveEditedSession} onClose={()=>setEditingSession(null)} C={C} S={S}/>}
         <Header/>
         <div style={S.wrap}><HistoryInner/></div>
         <TabBar view="history" setView={setView} C={C}/>
@@ -4234,14 +4315,6 @@ function SetupWizard({S,C,initial,onSave,onCancel}){
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<GymTracker/>);
-</script>
-
-<script>
-if('serviceWorker' in navigator){
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(e => console.log('SW:', e));
-  });
-}
 </script>
 </body>
 </html>
