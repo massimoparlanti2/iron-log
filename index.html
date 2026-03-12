@@ -169,7 +169,7 @@ function predictPR(exName,targetKg,sessions){
 
 
 // ── ADVANCED ANALYTICS HELPERS ──
-function calcFaticaIndex(sessions){
+function calcFaticaIndex(sessions,actEntries){
   // ATL (Acute Training Load) 7gg vs CTL (Chronic) 28gg → TSB (Training Stress Balance)
   const today=new Date();
   const vol7=[],vol28=[];
@@ -177,7 +177,10 @@ function calcFaticaIndex(sessions){
     const d=new Date(today);d.setDate(d.getDate()-i);
     const iso=d.toISOString().slice(0,10);
     const daySess=sessions.filter(s=>s.date===iso);
-    const v=daySess.reduce((t,s)=>t+sessionVol(s),0);
+    let v=daySess.reduce((t,s)=>t+sessionVol(s),0);
+    // aggiungi "stress equivalente" per attività extra (stima: 30min = ~1000 unità di volume)
+    const dayActs=(actEntries||{})[iso]||[];
+    v+=dayActs.reduce((t,a)=>t+(a.min||0)*33,0);
     if(i<7)vol7.push(v);
     vol28.push(v);
   }
@@ -348,9 +351,12 @@ function calcBMR(weightKg,heightCm,age,isMale){
 // TDEE from actual training data
 function calcSmartTDEE(bmr,sessions,actEntries){
   if(!bmr)return null;
-  // Count average workouts/week from last 4 weeks
+  // Count average workouts/week from last 4 weeks (palestra + attività extra)
   const recent=sessions.filter(s=>(Date.now()-new Date(s.date))/86400000<=28);
-  const wkFreq=recent.length/4;
+  const recentActDays=Object.entries(actEntries||{}).filter(([d])=>(Date.now()-new Date(d))/86400000<=28).length;
+  const gymFreq=recent.length/4;
+  const actFreq=recentActDays/4;
+  const wkFreq=gymFreq+actFreq*0.5; // attività extra contano meno del gym
   // Activity multiplier
   let mult;
   if(wkFreq<1)mult=1.2;
@@ -1475,12 +1481,18 @@ function SessionEditModal({session,onSave,onClose,C,S}){
 }
 
 // ── WEEK GROUP SESSIONS ──
-function WeekGroup({weekKey,weekSessions,program,onDeleteSession,onEditSession,C,S}){
+function WeekGroup({weekKey,weekSessions,program,actEntries,onDeleteSession,onEditSession,C,S}){
   const [open,setOpen]=useState(false);
   const dayColorMap={};(program?.days||[]).forEach((d,i)=>{dayColorMap[d.name]=d.color||DAY_COLORS[i%DAY_COLORS.length];});
   const vol=Math.round(weekSessions.reduce((t,s)=>t+sessionVol(s),0));
   const kcal=weekSessions.reduce((t,s)=>t+(s.kcal||0),0);
   const dur=weekSessions.reduce((t,s)=>t+(s.duration||0),0);
+  // attività extra di questa settimana
+  const [wkStart,wkEnd]=[weekKey, (()=>{const d=new Date(weekKey);d.setDate(d.getDate()+6);return d.toISOString().slice(0,10);})()];
+  const wkActs=Object.entries(actEntries||{}).filter(([d])=>d>=wkStart&&d<=wkEnd);
+  const actKcal=wkActs.reduce((t,[,acts])=>t+acts.reduce((s,a)=>s+(a.kcal||0),0),0);
+  const actMin=wkActs.reduce((t,[,acts])=>t+acts.reduce((s,a)=>s+(a.min||0),0),0);
+  const actCount=wkActs.reduce((t,[,acts])=>t+acts.length,0);
   useEffect(()=>{
     const today=new Date(),dow=today.getDay()||7;
     const mon=new Date(today);mon.setDate(today.getDate()-dow+1);
@@ -1493,9 +1505,11 @@ function WeekGroup({weekKey,weekSessions,program,onDeleteSession,onEditSession,C
           <p style={{margin:"0 0 3px",fontSize:13,fontWeight:700,color:C.text}}>{weekLabel(weekKey)}</p>
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
             <span style={{fontSize:9,color:"#ef4444"}}>{weekSessions.length} allenamenti</span>
+            {actCount>0&&<span style={{fontSize:9,color:"#10b981"}}>{actCount} attività</span>}
             {vol>0&&<span style={{fontSize:9,color:C.text3}}>{vol>=1000?`${(vol/1000).toFixed(1)}t`:`${vol}kg`} vol</span>}
             {dur>0&&<span style={{fontSize:9,color:C.text3}}>⏱{fmtDur(dur)}</span>}
-            {kcal>0&&<span style={{fontSize:9,color:"#f97316"}}>🔥{kcal}kcal</span>}
+            {actMin>0&&<span style={{fontSize:9,color:"#06b6d4"}}>🏃{actMin}min</span>}
+            {(kcal+actKcal)>0&&<span style={{fontSize:9,color:"#f97316"}}>🔥{kcal+actKcal}kcal</span>}
           </div>
         </div>
         <div style={{display:"flex",gap:4,alignItems:"center",marginLeft:8}}>
@@ -1533,6 +1547,16 @@ function WeekGroup({weekKey,weekSessions,program,onDeleteSession,onEditSession,C
           </div>
         );
       })}
+      {/* Attività extra della settimana */}
+      {open&&wkActs.length>0&&wkActs.flatMap(([date,acts])=>acts.map((a,j)=>(
+        <div key={date+j} style={{padding:"8px 14px",borderTop:`1px solid ${C.border}`,borderLeft:"3px solid #10b981",display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:16,flexShrink:0}}>{ACT_ICONS[a.type]||"🏅"}</span>
+          <div style={{flex:1}}>
+            <p style={{margin:0,fontSize:12,fontWeight:600,color:C.text2}}>{a.type}</p>
+            <p style={{margin:0,fontSize:9,color:C.text3}}>{date}{a.min>0?` · ⏱${a.min}min`:""}{a.kcal>0?` · 🔥${a.kcal}kcal`:""}</p>
+          </div>
+        </div>
+      )))}
     </div>
   );
 }
@@ -2367,8 +2391,8 @@ function WeekSummary({sessions,setSessions,nutrEntries,setNutrEntries,actEntries
 // ══════════════════════════════════════════════
 // ── FATICA INDEX CARD ──
 // ══════════════════════════════════════════════
-function FaticaCard({sessions,C,S}){
-  const fi=calcFaticaIndex(sessions);
+function FaticaCard({sessions,actEntries,C,S}){
+  const fi=calcFaticaIndex(sessions,actEntries);
   const deload=getDeloadSuggestion(sessions);
   const statusColor={OVERREACHING:"#ef4444",["CARICO ALTO"]:"#f97316",OTTIMALE:"#10b981",FRESCO:"#3b82f6",DETRAINING:"#8b5cf6"}[fi.status]||"#6b7280";
   const tsbAbs=Math.abs(fi.tsb);
@@ -2421,13 +2445,14 @@ function MonthlyCompare({sessions,nutrEntries,tdeeEntries,actEntries,C,S}){
   const maxVol=Math.max(...months.map(([,v])=>v.volume),1);
   const maxSess=Math.max(...months.map(([,v])=>v.sessions),1);
   const [metric,setMetric]=React.useState("volume");
-  const metrics=[["volume","📦 Volume"],["sessions","🗓 Sessioni"],["duration","⏱ Tempo"],["kcalBurned","🔥 Kcal"]];
-  const getValue=(v)=>({volume:v.volume,sessions:v.sessions,duration:v.duration,kcalBurned:v.kcalBurned}[metric]||0);
+  const metrics=[["volume","📦 Volume"],["sessions","🗓 Sessioni"],["duration","⏱ Tempo"],["kcalBurned","🔥 Kcal"],["actMin","🏃 Attività"]];
+  const getValue=(v)=>({volume:v.volume,sessions:v.sessions,duration:v.duration+(v.actMin||0),kcalBurned:v.kcalBurned,actMin:v.actMin||0}[metric]||0);
   const formatV=(v,m)=>{
     if(m==="volume")return v>=1000?(v/1000).toFixed(1)+"t":v+"kg";
     if(m==="sessions")return v+"";
     if(m==="duration")return fmtDur(v);
     if(m==="kcalBurned")return v>999?(v/1000).toFixed(1)+"k":v+"";
+    if(m==="actMin")return v+"min";
     return v+"";
   };
   const vals=months.map(([,v])=>getValue(v));
@@ -3044,7 +3069,7 @@ function AnalisiPanel({sessions,bwEntries,actEntries,nutrEntries,tdeeEntries,rec
       )}
       {atab==="dashboard"&&(
         <div>
-          <FaticaCard sessions={sessions} C={C} S={S}/>
+          <FaticaCard sessions={sessions} actEntries={actEntries} C={C} S={S}/>
           <FFMIPanel bwEntries={bwEntries} C={C} S={S}/>
           <MonthlyCompare sessions={sessions} nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} actEntries={actEntries} C={C} S={S}/>
           <div style={S.card}>
@@ -3598,8 +3623,7 @@ function FinishPage({C,S,workoutStart,program,activeDay,logData,sessionsRef,onDo
     const exercises=day.exercises.map(ex=>{
       const d=logData[ex.name]||{};
       return{name:ex.name,muscle:ex.muscle,sets:ex.sets,weight:parseFloat(d.weight)||0,reps:parseInt(d.reps)||ex.minReps,score:d.score||3,note:d.note||""};
-    });
-    const sess={id:Date.now(),date:todayISO(),dayName:day.name,exercises,duration:parseInt(dur)||0,kcal:parseInt(kcal)||0,note};
+    });    const sess={id:Date.now(),date:todayISO(),dayName:day.name,exercises,duration:parseInt(dur)||0,kcal:parseInt(kcal)||0,note};
     const updated=[...sessionsRef.current,sess];
     sessionsRef.current=updated;db(SESS_KEY,updated);setSaved(true);setTimeout(()=>onDone(updated,exercises),400);
   };
@@ -3713,7 +3737,18 @@ function GymTracker(){
   };
   const notify=(msg,col="#10b981")=>{setToast({msg,col});setTimeout(()=>setToast(null),2500);};
   const saveProgram=(p)=>{setProgram(p);db(PROG_KEY,p);notify("Programma salvato! 💪");setView("workout");};
-  const startWorkout=(di)=>{setActiveDay(di);setLogData({});setWorkoutStart(Date.now());setView("log");};
+  const startWorkout=(di)=>{
+    setActiveDay(di);
+    // Pre-compila con i valori suggeriti per ogni esercizio
+    const day=program.days[di];
+    const prefilled={};
+    day.exercises.forEach(ex=>{
+      const sg=getSuggestion(ex.name,ex.minReps,ex.maxReps,ex.step,sessions);
+      if(sg){prefilled[ex.name]={weight:sg.nw,reps:sg.nr};}
+    });
+    setLogData(prefilled);
+    setWorkoutStart(Date.now());setView("log");
+  };
   const setGoal=(name,kg)=>{const g={...goals,[name]:kg};setGoals(g);db(GOALS_KEY,g);};
   const dl=(content,filename,type="text/plain")=>{const b=new Blob([content],{type});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=filename;a.click();URL.revokeObjectURL(a.href);};
   const csvRow=(...cols)=>cols.map(c=>{const s=String(c??'');return s.includes(',')||s.includes('"')||s.includes('\n')?`"${s.replace(/"/g,'""')}"`:`${s}`;}).join(',')+'\n';
@@ -3791,6 +3826,9 @@ function GymTracker(){
   const saveEditedSession=(updated)=>{
     const newSessions=sessions.map(s=>s.id===updated.id?updated:s);
     updateSessions(newSessions);db(SESS_KEY,newSessions);
+    // controlla nuovi PR dopo modifica
+    const prevRec=getRecords(newSessions.filter(s=>s.id!==updated.id));
+    updated.exercises.forEach(e=>{if(e.weight>0&&(!prevRec[e.name]||e.weight>prevRec[e.name].weight)){setNewPR({name:e.name,weight:e.weight});setTimeout(()=>setNewPR(null),3500);}});
     setEditingSession(null);notify("Allenamento modificato ✓");
   };
 
@@ -3876,6 +3914,13 @@ function GymTracker(){
           })()}
           <RestTimer C={C} S={S}/>
           <div style={{...S.card,padding:"10px 14px"}}><HydrationTracker C={C}/></div>
+          {/* Avviso pre-compilazione automatica */}
+          {day.exercises.some(ex=>getSuggestion(ex.name,ex.minReps,ex.maxReps,ex.step,sessions))&&(
+            <div style={{background:"#3b82f618",border:"1px solid #3b82f630",borderRadius:8,padding:"7px 12px",marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:12}}>🤖</span>
+              <p style={{margin:0,fontSize:9,color:"#3b82f6"}}>Pesi e reps pre-compilati con la progressione suggerita. Modifica se necessario, poi segna la difficoltà.</p>
+            </div>
+          )}
           {day.exercises.map((ex,i)=>{
             const sg=getSuggestion(ex.name,ex.minReps,ex.maxReps,ex.step,sessions);
             const cur=logData[ex.name]||{};
@@ -3915,18 +3960,18 @@ function GymTracker(){
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
                   <div>
-                    <label style={S.lbl}>Peso (kg)</label>
+                    <label style={S.lbl}>Peso (kg){sg&&cur.weight==sg.nw&&!cur._touched?" 🤖":""}</label>
                     <input type="number" inputMode="decimal" min="0" step="0.5"
-                      style={{...S.inp,fontSize:22,fontWeight:900,textAlign:"center",borderColor:isNewPR?"#f59e0b":C.border2}}
+                      style={{...S.inp,fontSize:22,fontWeight:900,textAlign:"center",borderColor:isNewPR?"#f59e0b":cur.weight==sg?.nw&&!cur._touched?C.border:C.border2}}
                       placeholder={sg?sg.nw:"0"} value={cur.weight??""}
-                      onChange={e=>setLogData(d=>({...d,[ex.name]:{...d[ex.name],weight:e.target.value}}))}/>
+                      onChange={e=>setLogData(d=>({...d,[ex.name]:{...d[ex.name],weight:e.target.value,_touched:true}}))}/>
                   </div>
                   <div>
-                    <label style={S.lbl}>Ripetizioni</label>
+                    <label style={S.lbl}>Ripetizioni{sg&&cur.reps==sg.nr&&!cur._touched?" 🤖":""}</label>
                     <input type="number" inputMode="numeric" min="1" max="100"
                       style={{...S.inp,fontSize:22,fontWeight:900,textAlign:"center"}}
                       placeholder={sg?sg.nr:ex.minReps} value={cur.reps??""}
-                      onChange={e=>setLogData(d=>({...d,[ex.name]:{...d[ex.name],reps:e.target.value}}))}/>
+                      onChange={e=>setLogData(d=>({...d,[ex.name]:{...d[ex.name],reps:e.target.value,_touched:true}}))}/>
                   </div>
                 </div>
                 <div style={{marginBottom:8}}>
@@ -4055,7 +4100,7 @@ function GymTracker(){
               {/* Sessioni */}
               <h2 style={S.h2}>SESSIONI PER SETTIMANA</h2>
               {!sessions.length&&<p style={{color:C.text4,textAlign:"center",fontSize:12,padding:"20px 0"}}>Nessuna sessione ancora</p>}
-              {weekGroups.map(([wk,wkS])=><WeekGroup key={wk} weekKey={wk} weekSessions={wkS} program={program} onDeleteSession={deleteSession} onEditSession={setEditingSession} C={C} S={S}/>)}
+              {weekGroups.map(([wk,wkS])=><WeekGroup key={wk} weekKey={wk} weekSessions={wkS} program={program} actEntries={actEntries} onDeleteSession={deleteSession} onEditSession={setEditingSession} C={C} S={S}/>)}
             </div>
           )}
         </div>
