@@ -107,8 +107,20 @@ const BADGES=[
   {id:"volume100k",   name:"Tonnellata",     icon:"🏋", desc:"100.000 kg di volume totale",       check:(_,s)=>s.reduce((t,x)=>t+sessionVol(x),0)>=100000},
   {id:"long_sess",    name:"Maratoneta",     icon:"⏱", desc:"Sessione da 90+ minuti",            check:(_,s)=>s.some(x=>(x.duration||0)>=90)},
   {id:"big3_pr",      name:"Big Three",      icon:"💪", desc:"PR su Panca, Squat e Stacchi",      check:(r)=>["Panca Piana","Squat","Stacchi"].every(n=>r[n])},
+  {id:"act_first",    name:"Primo Passo",    icon:"👟", desc:"Prima attività extra registrata",    check:(_,_s,a)=>Object.values(a||{}).flat().length>=1},
+  {id:"act10",        name:"Atleta Totale",  icon:"🏅", desc:"10 attività extra completate",       check:(_,_s,a)=>Object.values(a||{}).flat().length>=10},
+  {id:"act50",        name:"Iron Sport",     icon:"⚡", desc:"50 attività extra completate",       check:(_,_s,a)=>Object.values(a||{}).flat().length>=50},
+  {id:"run_first",    name:"Runner",         icon:"🏃", desc:"Prima corsa registrata",             check:(_,_s,a)=>Object.values(a||{}).flat().some(x=>x.type==="Corsa")},
+  {id:"multi_sport",  name:"Multisport",     icon:"🎯", desc:"3 sport diversi in una settimana",  check:(_,_s,a)=>{
+    const today=new Date(),dow=today.getDay()||7;
+    const mon=new Date(today);mon.setDate(today.getDate()-dow+1);
+    const monISO=mon.toISOString().slice(0,10);
+    const sunISO=(()=>{const d=new Date(mon);d.setDate(d.getDate()+6);return d.toISOString().slice(0,10);})();
+    const thisWeekTypes=new Set(Object.entries(a||{}).filter(([d])=>d>=monISO&&d<=sunISO).flatMap(([,acts])=>acts.map(x=>x.type)));
+    return thisWeekTypes.size>=3;
+  }},
 ];
-function calcXP(sessions){
+function calcXP(sessions, actEntries){
   let xp=0;
   sessions.forEach(s=>{
     xp+=50;
@@ -117,6 +129,10 @@ function calcXP(sessions){
     if((s.duration||0)>=60)xp+=15;
     if((s.duration||0)>=90)xp+=25;
     if((s.kcal||0)>=300)xp+=15;
+  });
+  // attività extra: 10 XP base + 1 XP ogni 10 minuti
+  Object.values(actEntries||{}).forEach(acts=>{
+    acts.forEach(a=>{xp+=10+Math.floor((a.min||0)/10);});
   });
   return xp;
 }
@@ -129,8 +145,8 @@ function getLevelProgress(xp){
   if(lv.max===Infinity) return 1;
   return(xp-lv.min)/(lv.max-lv.min);
 }
-function getUnlockedBadges(sessions,records){
-  return BADGES.filter(b=>b.check(records,sessions)).map(b=>b.id);
+function getUnlockedBadges(sessions,records,actEntries){
+  return BADGES.filter(b=>b.check(records,sessions,actEntries)).map(b=>b.id);
 }
 // ── ANALYTICS helpers ──
 function get1RMHistory(exName,sessions){
@@ -713,7 +729,8 @@ function getSuggestion(exName,minReps,maxReps,step,sessions){
   else if(ls===2){if(lr<maxReps){nr=lr+1;action="AUMENTA REPS";badge="#10b981";detail=`${lr}→${nr} rip`;}else{nw=lw+st;nr=minReps;action="AUMENTA PESO 🔺";badge="#22c55e";detail=`${lw}→${nw}kg`;}}
   else if(ls===3){if(lr<maxReps){nr=lr+1;action="AUMENTA REPS";badge="#10b981";detail=`${lr}→${nr} rip`;}else{nw=lw+st;nr=minReps;action="AUMENTA PESO 🔺";badge="#22c55e";detail=`Max! ${lw}→${nw}kg`;}}
   else if(ls===4){action="MANTIENI";badge="#f97316";detail=`${lr}×${lw}kg`;}
-  else{nw=Math.max(lw-st,0);nr=minReps;action="RIDUCI PESO ↓";badge="#ef4444";detail=`${lw}→${nw}kg`;}
+  else{nw=Math.max(lw-st,st);nr=minReps;action="RIDUCI PESO ↓";badge="#ef4444";detail=`${lw}→${nw}kg`;}
+  if(nw<=0)return null; // non pre-compilare se il peso risultante è 0 o negativo
   return{nw,nr,action,badge,detail,lw,lr,ls};
 }
 
@@ -768,8 +785,8 @@ function makeS(C, density){
 // ══════════════════════════════════════════════
 // ── XP LEVEL CARD ──
 // ══════════════════════════════════════════════
-function XPLevelCard({sessions,C,S}){
-  const xp=calcXP(sessions);
+function XPLevelCard({sessions,actEntries,C,S}){
+  const xp=calcXP(sessions,actEntries);
   const lv=getLevel(xp);
   const pct=getLevelProgress(xp);
   const nextLv=LEVELS[lv.idx+1];
@@ -807,8 +824,8 @@ function XPLevelCard({sessions,C,S}){
 // ══════════════════════════════════════════════
 // ── BADGE WALL ──
 // ══════════════════════════════════════════════
-function BadgeWall({sessions,records,C,S}){
-  const unlocked=getUnlockedBadges(sessions,records);
+function BadgeWall({sessions,records,actEntries,C,S}){
+  const unlocked=getUnlockedBadges(sessions,records,actEntries);
   const [showAll,setShowAll]=useState(false);
   const list=showAll?BADGES:BADGES.slice(0,8);
   return(
@@ -1561,8 +1578,8 @@ function WeekGroup({weekKey,weekSessions,program,actEntries,onDeleteSession,onEd
   );
 }
 
-// ── REST TIMER ──
-function RestTimer({C,S}){
+// ── REST TIMER (sticky banner when running) ──
+function RestTimer({C,S,sticky}){
   const PRESETS=[60,90,120,180];
   const [secs,setSecs]=useState(null);const [running,setRunning]=useState(false);const [total,setTotal]=useState(90);
   const ref=useRef(null);
@@ -1571,6 +1588,25 @@ function RestTimer({C,S}){
   const stop=()=>{clearInterval(ref.current);setRunning(false);setSecs(null);};
   useEffect(()=>()=>clearInterval(ref.current),[]);
   const pct=secs!=null?secs/total:0,r=20,circ=2*Math.PI*r;
+  // Sticky banner when running
+  if(sticky&&running&&secs!=null){
+    const mins=Math.floor(secs/60),secsLeft=secs%60;
+    const urgColor=secs<=10?"#ef4444":secs<=30?"#f59e0b":"#10b981";
+    return(
+      <div style={{position:"sticky",top:0,zIndex:150,background:C.hdr,borderBottom:`2px solid ${urgColor}`,padding:"8px 16px",display:"flex",alignItems:"center",gap:12,boxShadow:`0 2px 12px ${urgColor}30`}}>
+        <svg width={36} height={36} style={{transform:"rotate(-90deg)",flexShrink:0}}>
+          <circle cx={18} cy={18} r={14} fill="none" stroke={C.bg4} strokeWidth={3}/>
+          <circle cx={18} cy={18} r={14} fill="none" stroke={urgColor} strokeWidth={3} strokeDasharray={2*Math.PI*14} strokeDashoffset={2*Math.PI*14*(1-pct)} strokeLinecap="round" style={{transition:"stroke-dashoffset 0.9s linear"}}/>
+        </svg>
+        <div style={{flex:1}}>
+          <p style={{margin:0,fontSize:8,letterSpacing:2,color:urgColor}}>RECUPERO IN CORSO</p>
+          <p style={{margin:0,fontSize:18,fontWeight:900,color:urgColor,lineHeight:1}}>{mins}:{String(secsLeft).padStart(2,"0")}</p>
+        </div>
+        <button onClick={stop} style={{background:C.bg3,border:`1px solid ${C.border2}`,color:C.text3,borderRadius:8,padding:"6px 12px",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>✕ Stop</button>
+      </div>
+    );
+  }
+  // Compact inline version
   return(
     <div style={{...S.card,display:"flex",alignItems:"center",gap:12}}>
       <div style={{position:"relative",width:48,height:48,flexShrink:0}}>
@@ -2175,6 +2211,18 @@ function WeekSummary({sessions,setSessions,nutrEntries,setNutrEntries,actEntries
   const [editCal,setEditCal]=useState(false);
   const [editKcalIn,setEditKcalIn]=useState("");
   const [editKcalOut,setEditKcalOut]=useState("");
+  const swipeRef=useRef(null);
+  const touchStart=useRef(null);
+  // swipe handlers
+  const onTouchStart=(e)=>{touchStart.current=e.touches[0].clientX;};
+  const onTouchEnd=(e)=>{
+    if(touchStart.current===null)return;
+    const dx=e.changedTouches[0].clientX-touchStart.current;
+    touchStart.current=null;
+    if(Math.abs(dx)<40)return;
+    if(dx<0){setOffset(o=>o-1);setSelDay(null);}
+    else{setOffset(o=>Math.min(o+1,0));setSelDay(null);}
+  };
   const days=getWeekDays(offset);
   const today=todayISO();
   const dayColorMap={};(program?.days||[]).forEach((d,i)=>{dayColorMap[d.name]=d.color||DAY_COLORS[i%DAY_COLORS.length];});
@@ -2231,13 +2279,13 @@ function WeekSummary({sessions,setSessions,nutrEntries,setNutrEntries,actEntries
         <p style={{margin:0,fontSize:9,letterSpacing:2,color:C.text3}}>RESOCONTO SETTIMANALE</p>
         <div style={{display:"flex",gap:4,alignItems:"center"}}>
           <button onClick={()=>{setOffset(o=>o-1);setSelDay(null);}} style={{background:"none",border:"none",color:C.text2,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>‹</button>
-          <span style={{fontSize:9,color:C.text3}}>{offset===0?"Questa sett.":"Sett. scorsa"}</span>
+          <span style={{fontSize:9,color:C.text3}}>{offset===0?"Questa sett.":offset===-1?"Sett. scorsa":weekLabel(days[0].toISOString().slice(0,10))}</span>
           <button onClick={()=>{setOffset(o=>Math.min(o+1,0));setSelDay(null);}} style={{background:"none",border:"none",color:offset===0?C.text4:C.text2,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>›</button>
         </div>
       </div>
 
       {/* 7 colonne giornaliere */}
-      <div style={{display:"flex",gap:3}}>
+      <div style={{display:"flex",gap:3}} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         {wkData.map(({ds,d,i,daySess,kcalIn,kcalOut,balance,hasData})=>{
           const isToday=ds===today;
           const isSel=selDay===ds;
@@ -3613,8 +3661,11 @@ function FinishPage({C,S,workoutStart,program,activeDay,logData,sessionsRef,onDo
   const [kcal,setKcal]=useState("");
   const [note,setNote]=useState("");
   const [saved,setSaved]=useState(false);
-  const [showConfetti,setShowConfetti]=useState(true);
-  useEffect(()=>{const t=setTimeout(()=>setShowConfetti(false),3200);return()=>clearTimeout(t);},[]);
+  const [showConfetti,setShowConfetti]=useState(false);
+  const confettiShown=useRef(false);
+  useEffect(()=>{
+    if(!confettiShown.current){confettiShown.current=true;setShowConfetti(true);setTimeout(()=>setShowConfetti(false),3200);}
+  },[]);
   const day=program.days[activeDay];
   const totalExercises=day.exercises.length;
   const loggedCount=day.exercises.filter(ex=>logData[ex.name]?.weight>0).length;
@@ -3622,7 +3673,7 @@ function FinishPage({C,S,workoutStart,program,activeDay,logData,sessionsRef,onDo
   const save=()=>{
     const exercises=day.exercises.map(ex=>{
       const d=logData[ex.name]||{};
-      return{name:ex.name,muscle:ex.muscle,sets:ex.sets,weight:parseFloat(d.weight)||0,reps:parseInt(d.reps)||ex.minReps,score:d.score||3,note:d.note||""};
+      return{name:ex.name,muscle:ex.muscle,sets:d.sets||ex.sets,weight:parseFloat(d.weight)||0,reps:parseInt(d.reps)||ex.minReps,score:d.score||3,note:d.note||""};
     });    const sess={id:Date.now(),date:todayISO(),dayName:day.name,exercises,duration:parseInt(dur)||0,kcal:parseInt(kcal)||0,note};
     const updated=[...sessionsRef.current,sess];
     sessionsRef.current=updated;db(SESS_KEY,updated);setSaved(true);setTimeout(()=>onDone(updated,exercises),400);
@@ -3912,7 +3963,7 @@ function GymTracker(){
               </div>
             );
           })()}
-          <RestTimer C={C} S={S}/>
+          <RestTimer C={C} S={S} sticky={true}/>
           <div style={{...S.card,padding:"10px 14px"}}><HydrationTracker C={C}/></div>
           {/* Avviso pre-compilazione automatica */}
           {day.exercises.some(ex=>getSuggestion(ex.name,ex.minReps,ex.maxReps,ex.step,sessions))&&(
@@ -3938,8 +3989,14 @@ function GymTracker(){
                     </div>
                     <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                       <span style={S.tag(ex.muscle)}>{ex.muscle}</span>
-                      <span style={{fontSize:9,color:C.text4}}>{ex.sets}×{ex.minReps}–{ex.maxReps}</span>
+                      <span style={{fontSize:9,color:C.text4}}>{ex.minReps}–{ex.maxReps} rip</span>
                       {pr&&<span style={{fontSize:9,color:C.text3}}>🏆 {pr.weight}kg</span>}
+                      {/* Serie modificabili on-the-fly */}
+                      <div style={{display:"flex",alignItems:"center",gap:4,background:C.bg3,borderRadius:6,padding:"1px 4px",border:`1px solid ${C.border2}`}}>
+                        <button onClick={()=>setLogData(d=>({...d,[ex.name]:{...d[ex.name],sets:Math.max(1,(d[ex.name]?.sets||ex.sets)-1)}}))} style={{background:"none",border:"none",color:"#ef4444",fontSize:14,cursor:"pointer",lineHeight:1,padding:"0 2px",fontFamily:"inherit"}}>−</button>
+                        <span style={{fontSize:10,fontWeight:700,color:C.text,minWidth:18,textAlign:"center"}}>{cur.sets||ex.sets}×</span>
+                        <button onClick={()=>setLogData(d=>({...d,[ex.name]:{...d[ex.name],sets:(d[ex.name]?.sets||ex.sets)+1}}))} style={{background:"none",border:"none",color:"#10b981",fontSize:14,cursor:"pointer",lineHeight:1,padding:"0 2px",fontFamily:"inherit"}}>+</button>
+                      </div>
                     </div>
                     {goalPct!==null&&<div style={{marginTop:5,height:3,borderRadius:2,background:C.bg4}}><div style={{height:"100%",width:`${goalPct*100}%`,background:goalPct>=1?"#f59e0b":"#ef4444",borderRadius:2}}/></div>}
                   </div>
@@ -4033,8 +4090,8 @@ function GymTracker(){
           {/* ── PROFILO ── */}
           {htab==="profilo"&&(
             <div className="fade-up">
-              <XPLevelCard sessions={sessions} C={C} S={S}/>
-              <BadgeWall sessions={sessions} records={records} C={C} S={S}/>
+              <XPLevelCard sessions={sessions} actEntries={actEntries} C={C} S={S}/>
+              <BadgeWall sessions={sessions} records={records} actEntries={actEntries} C={C} S={S}/>
             </div>
           )}
 
@@ -4099,7 +4156,14 @@ function GymTracker(){
               </div>
               {/* Sessioni */}
               <h2 style={S.h2}>SESSIONI PER SETTIMANA</h2>
-              {!sessions.length&&<p style={{color:C.text4,textAlign:"center",fontSize:12,padding:"20px 0"}}>Nessuna sessione ancora</p>}
+              {!sessions.length&&(
+                <div style={{...S.card,textAlign:"center",padding:"32px 20px",borderStyle:"dashed",borderColor:C.border2}}>
+                  <div style={{fontSize:42,marginBottom:12,opacity:0.5}}>🏋</div>
+                  <p style={{margin:"0 0 6px",fontSize:15,fontWeight:700,color:C.text}}>Nessun allenamento ancora</p>
+                  <p style={{margin:"0 0 18px",fontSize:11,color:C.text3,lineHeight:1.5}}>Vai su WORKOUT e premi ▶ INIZIA per registrare la tua prima sessione.</p>
+                  <button style={{...S.btn("red"),padding:"10px 24px",fontSize:11}} onClick={()=>setView("workout")}>→ VAI A WORKOUT</button>
+                </div>
+              )}
               {weekGroups.map(([wk,wkS])=><WeekGroup key={wk} weekKey={wk} weekSessions={wkS} program={program} actEntries={actEntries} onDeleteSession={deleteSession} onEditSession={setEditingSession} C={C} S={S}/>)}
             </div>
           )}
@@ -4172,7 +4236,7 @@ function GymTracker(){
 
             <TodaySnapshot sessions={sessions} nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} actEntries={actEntries} program={program} C={C} S={S}/>
             <WeekSummary sessions={sessions} setSessions={(v)=>{updateSessions(v);db(SESS_KEY,v);}} nutrEntries={nutrEntries} setNutrEntries={(v)=>{setNutrEntries(v);db(NUTR_KEY,v);}} actEntries={actEntries} setActEntries={(v)=>{setActEntries(v);db(ACT_KEY,v);}} tdeeEntries={tdeeEntries} setTdeeEntries={(v)=>{setTdeeEntries(v);db(TDEE_KEY,v);}} program={program} C={C} S={S}/>
-            {(()=>{const xp=calcXP(sessions);const lv=getLevel(xp);const pct=getLevelProgress(xp);const unlockedCount=getUnlockedBadges(sessions,records).length;return(
+            {(()=>{const xp=calcXP(sessions,actEntries);const lv=getLevel(xp);const pct=getLevelProgress(xp);const unlockedCount=getUnlockedBadges(sessions,records,actEntries).length;return(
               <div style={{...S.card,marginTop:10,display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderLeft:`3px solid ${lv.color}`,background:`linear-gradient(135deg,${C.bg2},${C.bg3})`}}>
                 <span style={{fontSize:26}}>{lv.icon}</span>
                 <div style={{flex:1,minWidth:0}}>
