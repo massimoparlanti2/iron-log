@@ -77,7 +77,7 @@ const DEFAULT_EX={
 const QUOTES=["Il dolore di oggi è la forza di domani.","Non fermarti quando sei stanco. Fermati quando hai finito.","Ogni rep ti avvicina alla versione migliore di te.","La disciplina batte la motivazione ogni giorno.","Il corpo raggiunge ciò che la mente crede.","Progressi lenti sono sempre meglio di nessun progresso.","La fatica di oggi è il trofeo di domani.","Non si tratta di essere il migliore. Si tratta di essere migliore di ieri."];
 
 const PROG_KEY="il_v10_prog", SESS_KEY="il_v10_sess", THEME_KEY="il_theme";
-const BW_KEY="il_bw", GOALS_KEY="il_goals", NUTR_KEY="il_nutr", ACT_KEY="il_act", TDEE_KEY="il_tdee";
+const BW_KEY="il_bw", GOALS_KEY="il_goals", NUTR_KEY="il_nutr", ACT_KEY="il_act", TDEE_KEY="il_tdee", BW_GOAL_KEY="il_bw_goal";
 
 // ══════════════════════════════════════════════
 // ── GAMIFICATION SYSTEM ──
@@ -99,9 +99,9 @@ const BADGES=[
   {id:"sess10",       name:"Decathlete",     icon:"🔟", desc:"10 sessioni completate",            check:(_,s)=>s.length>=10},
   {id:"sess50",       name:"Iron Fifty",     icon:"50",desc:"50 sessioni completate",           check:(_,s)=>s.length>=50},
   {id:"sess100",      name:"Centurion",      icon:"💯", desc:"100 sessioni completate",           check:(_,s)=>s.length>=100},
-  {id:"streak4",      name:"Macchina",       icon:"⚙",  desc:"4 settimane di streak",             check:(_,s)=>getStreak(s)>=4},
-  {id:"streak8",      name:"Inarrestabile",  icon:"🚂", desc:"8 settimane di streak",             check:(_,s)=>getStreak(s)>=8},
-  {id:"streak12",     name:"Leggenda Viva",  icon:"🌋", desc:"12 settimane di streak",            check:(_,s)=>getStreak(s)>=12},
+  {id:"streak4",      name:"Macchina",       icon:"⚙",  desc:"4 settimane di streak",             check:(_,s,a)=>getStreak(s,a)>=4},
+  {id:"streak8",      name:"Inarrestabile",  icon:"🚂", desc:"8 settimane di streak",             check:(_,s,a)=>getStreak(s,a)>=8},
+  {id:"streak12",     name:"Leggenda Viva",  icon:"🌋", desc:"12 settimane di streak",            check:(_,s,a)=>getStreak(s,a)>=12},
   {id:"pr5",          name:"Record Breaker", icon:"🏆", desc:"5 personal record diversi",         check:(r)=>Object.keys(r).length>=5},
   {id:"pr20",         name:"PR Hunter",      icon:"🎯", desc:"20 personal record diversi",        check:(r)=>Object.keys(r).length>=20},
   {id:"volume100k",   name:"Tonnellata",     icon:"🏋", desc:"100.000 kg di volume totale",       check:(_,s)=>s.reduce((t,x)=>t+sessionVol(x),0)>=100000},
@@ -679,7 +679,11 @@ function getDietQualityScore(nutrEntries, tdeeEntries, sessions, bwKg) {
   return {score:Math.min(score,100), grade, gradeColor, breakdown};
 }
 
-function db(k,v){if(v===undefined){try{const x=localStorage.getItem(k);return x?JSON.parse(x):null;}catch(_){return null;}}try{localStorage.setItem(k,JSON.stringify(v));}catch(_){}}
+function db(k,v){
+  if(v===undefined){try{const x=localStorage.getItem(k);return x?JSON.parse(x):null;}catch(_){return null;}}
+  try{localStorage.setItem(k,JSON.stringify(v));}
+  catch(e){if((e.name==='QuotaExceededError'||e.code===22)&&!window._qlWarn){window._qlWarn=true;setTimeout(()=>alert('⚠️ Iron Log: spazio quasi esaurito!\nEsporta un backup JSON e rimuovi dati vecchi per liberare spazio.'),200);}}
+}
 function todayISO(){return new Date().toISOString().slice(0,10);}
 function fmtDur(m){if(!m)return"—";const h=Math.floor(m/60),r=m%60;return h?`${h}h ${r}m`:`${m}min`;}
 function sessionVol(s){return s.exercises.reduce((t,e)=>t+(e.sets||1)*e.reps*e.weight,0);}
@@ -693,10 +697,11 @@ function getRecords(sessions){
   }));
   return r;
 }
-function getStreak(sessions){
-  if(!sessions.length)return 0;
+function getStreak(sessions,actEntries){
   const toWeek=d=>{const dt=new Date(d),day=dt.getDay()||7;dt.setDate(dt.getDate()+1-day);return dt.toISOString().slice(0,10);};
-  const weeks=[...new Set([...sessions].map(s=>s.date).sort().reverse().map(toWeek))];
+  const activeDates=[...sessions.map(s=>s.date),...Object.keys(actEntries||{})];
+  if(!activeDates.length)return 0;
+  const weeks=[...new Set(activeDates.sort().reverse().map(toWeek))];
   let s=1;for(let i=0;i<weeks.length-1;i++){if((new Date(weeks[i])-new Date(weeks[i+1]))/604800000<=1)s++;else break;}return s;
 }
 function getWeekDays(offset=0){
@@ -2339,6 +2344,90 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
                 <BodyChart bwEntries={bwEntries} C={C}/>
               </div>
             )}
+            {/* Obiettivo peso con proiezione */}
+            {(()=>{
+              const [bwGoal,setBwGoalState]=useState(()=>db(BW_GOAL_KEY)||"");
+              const [editGoal,setEditGoal]=useState(false);
+              const [goalInput,setGoalInput]=useState(bwGoal||"");
+              const saveGoal=()=>{db(BW_GOAL_KEY,goalInput);setBwGoalState(goalInput);setEditGoal(false);};
+              if(!lastBw&&!bwGoal&&!editGoal)return null;
+              // calcola proiezione lineare dal trend recente
+              const projection=(()=>{
+                if(bwEntries.length<3||!bwGoal)return null;
+                const recent=bwEntries.slice(-10);
+                const n=recent.length;
+                const xs=recent.map((_,i)=>i),ys=recent.map(e=>e.w);
+                const sumX=xs.reduce((a,b)=>a+b,0),sumY=ys.reduce((a,b)=>a+b,0);
+                const sumXY=xs.reduce((t,x,i)=>t+x*ys[i],0),sumX2=xs.reduce((t,x)=>t+x*x,0);
+                const slope=(n*sumXY-sumX*sumY)/(n*sumX2-sumX*sumX)||0;
+                const intercept=(sumY-slope*sumX)/n;
+                const target=parseFloat(bwGoal);
+                const current=recent[recent.length-1].w;
+                const diff=target-current;
+                if(Math.abs(slope)<0.001)return{daysNeeded:null,weeklyRate:0,current,target,diff};
+                const daysNeeded=Math.round(diff/slope);
+                const weeklyRate=Math.round(slope*7*100)/100;
+                const eta=new Date();eta.setDate(eta.getDate()+daysNeeded);
+                return{daysNeeded,weeklyRate,current,target,diff,eta:daysNeeded>0&&daysNeeded<1000?eta.toLocaleDateString("it-IT",{month:"short",year:"numeric"}):null};
+              })();
+              const goalKg=parseFloat(bwGoal)||0;
+              const diffKg=lastBw&&goalKg?Math.round((goalKg-lastBw.w)*10)/10:null;
+              const goalOk=diffKg!==null&&Math.abs(diffKg)<0.5;
+              return(
+                <div style={{...S.card,borderLeft:`3px solid ${goalOk?"#10b981":"#3b82f6"}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <p style={{margin:0,fontSize:9,letterSpacing:2,color:"#3b82f6"}}>🎯 OBIETTIVO PESO</p>
+                    <button onClick={()=>{setEditGoal(v=>!v);setGoalInput(bwGoal||"");}} style={{background:"none",border:"none",color:C.text3,cursor:"pointer",fontSize:12,padding:"0 4px"}}>✏</button>
+                  </div>
+                  {editGoal?(
+                    <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+                      <div style={{flex:1}}>
+                        <label style={S.lbl}>Peso target (kg)</label>
+                        <input type="number" inputMode="decimal" style={S.inp} placeholder="es. 72" value={goalInput} onChange={e=>setGoalInput(e.target.value)}/>
+                      </div>
+                      <button style={{...S.btn("red"),padding:"11px 14px",flexShrink:0}} onClick={saveGoal}>💾</button>
+                      {bwGoal&&<button style={{...S.btn("ghost"),padding:"11px 10px",flexShrink:0}} onClick={()=>{db(BW_GOAL_KEY,"");setBwGoalState("");setEditGoal(false);}}>🗑</button>}
+                    </div>
+                  ):(
+                    <>
+                      {bwGoal&&lastBw&&(
+                        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:projection?10:0}}>
+                          <div style={{flex:1}}>
+                            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                              <span style={{fontSize:10,color:C.text3}}>{lastBw.w}kg ora</span>
+                              <span style={{fontSize:10,fontWeight:700,color:"#3b82f6"}}>{goalKg}kg target</span>
+                            </div>
+                            <div style={{height:8,borderRadius:4,background:C.bg4,overflow:"hidden"}}>
+                              <div style={{height:"100%",width:`${Math.min(lastBw.w/goalKg*100,100)}%`,background:goalOk?"#10b981":"#3b82f6",borderRadius:4,transition:"width 0.6s"}}/>
+                            </div>
+                            <p style={{margin:"4px 0 0",fontSize:9,color:goalOk?"#10b981":diffKg<0?"#ef4444":"#10b981"}}>
+                              {goalOk?"🎉 Obiettivo raggiunto!":diffKg>0?`+${diffKg}kg da aggiungere`:`${diffKg}kg da perdere`}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      {projection&&projection.eta&&!goalOk&&(
+                        <div style={{background:"#3b82f618",borderRadius:8,padding:"8px 12px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                            <div>
+                              <p style={{margin:"0 0 2px",fontSize:8,color:"#3b82f6",letterSpacing:1}}>PROIEZIONE LINEARE</p>
+                              <p style={{margin:0,fontSize:11,color:C.text2}}>Arrivo stimato: <strong style={{color:"#3b82f6"}}>{projection.eta}</strong></p>
+                            </div>
+                            <div style={{textAlign:"right"}}>
+                              <p style={{margin:"0 0 1px",fontSize:8,color:C.text3}}>ritmo attuale</p>
+                              <p style={{margin:0,fontSize:12,fontWeight:700,color:projection.weeklyRate>0?"#10b981":"#ef4444"}}>{projection.weeklyRate>0?"+":""}{projection.weeklyRate}kg/sett</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {!bwGoal&&(
+                        <p style={{margin:0,fontSize:10,color:C.text3,cursor:"pointer"}} onClick={()=>setEditGoal(true)}>Tocca ✏ per impostare un obiettivo di peso</p>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })()}
             <div style={S.card}>
               <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 12px"}}>INSERISCI MISURE</p>
               <label style={S.lbl}>Altezza (cm) — una volta sola</label>
@@ -2889,7 +2978,7 @@ function NutrNerdDash({nutrEntries,tdeeEntries,bwEntries,sessions,C,S}){
 // ══════════════════════════════════════════════
 // ── NOTIFICATION CENTER ──
 // ══════════════════════════════════════════════
-function NotificationCenter({sessions,C,S}){
+function NotificationCenter({sessions,actEntries,C,S}){
   const [perm,setPerm]=React.useState(()=>typeof Notification!=='undefined'?Notification.permission:'denied');
   const [remHour,setRemHour]=React.useState(()=>db("il_notif_hour")||8);
   const [remEnabled,setRemEnabled]=React.useState(()=>db("il_notif_on")||false);
@@ -2915,7 +3004,7 @@ function NotificationCenter({sessions,C,S}){
     }
   };
   const permColor={granted:"#10b981",denied:"#ef4444",default:"#f59e0b"}[perm]||"#6b7280";
-  const streak=getStreak(sessions);
+  const streak=getStreak(sessions,actEntries);
   return(
     <div style={S.card}>
       <p style={{margin:"0 0 12px",fontSize:9,letterSpacing:2,color:C.text3}}>🔔 NOTIFICHE & REMINDER</p>
@@ -3335,7 +3424,7 @@ function AnalisiPanel({sessions,bwEntries,actEntries,nutrEntries,tdeeEntries,rec
       )}
       {atab==="notifiche"&&(
         <div>
-          <NotificationCenter sessions={sessions} C={C} S={S}/>
+          <NotificationCenter sessions={sessions} actEntries={actEntries} C={C} S={S}/>
         </div>
       )}
     </div>
@@ -3872,6 +3961,9 @@ function FinishPage({C,S,workoutStart,program,activeDay,logData,sessionsRef,onDo
   const totalExercises=day.exercises.length;
   const loggedCount=day.exercises.filter(ex=>logData[ex.name]?.weight>0).length;
   const completionPct=totalExercises>0?Math.round((loggedCount/totalExercises)*100):100;
+  // stima automatica: MET 5.0 (forza) × peso corporeo × ore
+  const bwKg=(()=>{try{const bw=db(BW_KEY);return Array.isArray(bw)&&bw.length?bw[bw.length-1].w:75;}catch(_){return 75;}})();
+  const kcalEstimate=parseInt(dur)>0?Math.round(5.0*bwKg*(parseInt(dur)/60)):null;
   const save=()=>{
     const exercises=day.exercises.map(ex=>{
       const d=logData[ex.name]||{};
@@ -3914,7 +4006,12 @@ function FinishPage({C,S,workoutStart,program,activeDay,logData,sessionsRef,onDo
             </div>
             <div>
               <label style={S.lbl}>🔥 Calorie (kcal)</label>
-              <input type="number" inputMode="numeric" style={{...S.inp,fontSize:28,fontWeight:900,textAlign:"center",padding:"14px 8px"}} value={kcal} onChange={e=>setKcal(e.target.value)} placeholder="400"/>
+              <input type="number" inputMode="numeric" style={{...S.inp,fontSize:28,fontWeight:900,textAlign:"center",padding:"14px 8px"}} value={kcal} onChange={e=>setKcal(e.target.value)} placeholder={kcalEstimate||"400"}/>
+              {kcalEstimate&&!kcal&&(
+                <p style={{margin:"4px 0 0",fontSize:9,color:"#3b82f6",textAlign:"center",cursor:"pointer"}} onClick={()=>setKcal(String(kcalEstimate))}>
+                  🤖 stima ~{kcalEstimate} kcal · tap per usare
+                </p>
+              )}
               {iK>0&&iD>0&&<p style={{margin:"4px 0 0",fontSize:9,color:"#f97316",textAlign:"center"}}>{(iK/iD).toFixed(0)} kcal/min</p>}
             </div>
           </div>
@@ -4181,6 +4278,15 @@ function GymTracker(){
             const isNewPR=parseFloat(cur.weight||0)>0&&pr&&parseFloat(cur.weight)>pr.weight;
             const goal=goals[ex.name];
             const goalPct=pr&&goal?Math.min(pr.weight/goal,1):null;
+            // trova l'ultima sessione in cui compare questo esercizio
+            const lastEx=(()=>{
+              for(let j=sessions.length-1;j>=0;j--){
+                const e=sessions[j].exercises.find(e=>e.name===ex.name);
+                if(e)return{...e,date:sessions[j].date};
+              }return null;
+            })();
+            const curW=parseFloat(cur.weight)||0;
+            const weightDelta=lastEx&&curW>0?Math.round((curW-lastEx.weight)*10)/10:null;
             return(
               <div key={i} style={{...S.card,borderLeft:`3px solid ${MUSCLE_COLORS[ex.muscle]||dayCol}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",gap:8,marginBottom:10,alignItems:"flex-start"}}>
@@ -4201,6 +4307,17 @@ function GymTracker(){
                       </div>
                     </div>
                     {goalPct!==null&&<div style={{marginTop:5,height:3,borderRadius:2,background:C.bg4}}><div style={{height:"100%",width:`${goalPct*100}%`,background:goalPct>=1?"#f59e0b":"#ef4444",borderRadius:2}}/></div>}
+                    {/* Ultima volta */}
+                    {lastEx&&(
+                      <div style={{marginTop:5,display:"flex",alignItems:"center",gap:5,padding:"3px 7px",background:C.bg3,borderRadius:6,width:"fit-content"}}>
+                        <span style={{fontSize:8,color:C.text4}}>ultima:</span>
+                        <span style={{fontSize:9,fontWeight:700,color:C.text2}}>{lastEx.weight}kg×{lastEx.reps}</span>
+                        {weightDelta!==null&&weightDelta!==0&&(
+                          <span style={{fontSize:8,fontWeight:700,color:weightDelta>0?"#10b981":"#f59e0b"}}>{weightDelta>0?"+":""}{weightDelta}kg</span>
+                        )}
+                        <span style={{fontSize:7,color:C.text4}}>{lastEx.date}</span>
+                      </div>
+                    )}
                   </div>
                   <div style={{background:C.bg3,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px",textAlign:"right",flexShrink:0,minWidth:105}}>
                     {sg?(<>
@@ -4250,15 +4367,19 @@ function GymTracker(){
             {allScored?"🏁 TERMINA ALLENAMENTO":"⚠ Inserisci difficoltà per ogni esercizio"}
           </button>
         </div>
-        <TabBar view="log" setView={setView} C={C}/>
+        <TabBar view="log" setView={(v)=>{
+          if(v!=="log"&&v!=="finish"){
+            if(window.confirm("⚠️ Allenamento in corso!\n\nSe esci perdi tutti i dati inseriti.\nSei sicuro?"))setView(v);
+          }else setView(v);
+        }} C={C}/>
       </div>
     );
   }
 
   if(view==="history"){
     const allExNames=program?[...new Set(program.days.flatMap(d=>d.exercises.map(e=>e.name)))]:[];
-    const records=getRecords(sessions);
-    const streak=getStreak(sessions);
+    const records=useMemo(()=>getRecords(sessions),[sessions]);
+    const streak=useMemo(()=>getStreak(sessions,actEntries),[sessions,actEntries]);
     const totMins=sessions.reduce((s,x)=>s+(x.duration||0),0);
     const totKcal=sessions.reduce((s,x)=>s+(x.kcal||0),0);
     const withDur=sessions.filter(s=>s.duration>0);
@@ -4323,6 +4444,75 @@ function GymTracker(){
               {sessions.length>=3&&<div style={S.card}><MuscleChart sessions={sessions} C={C}/></div>}
               {sessions.length>=4&&<div style={S.card}><RadarChart sessions={sessions} C={C}/></div>}
               {sessions.length>=7&&<div style={S.card}><HeatmapChart sessions={sessions} actEntries={actEntries} C={C}/></div>}
+              {sessions.length>=4&&(()=>{
+                // Calendario mensile tipo GitHub contribution graph
+                const [calMonth,setCalMonth]=React.useState(()=>{const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;});
+                const [yr,mo]=calMonth.split("-").map(Number);
+                const firstDay=new Date(yr,mo-1,1);
+                const lastDay=new Date(yr,mo,0);
+                const startDow=(firstDay.getDay()||7)-1; // 0=Lun
+                const totalDays=lastDay.getDate();
+                const cells=[];
+                for(let i=0;i<startDow;i++)cells.push(null);
+                for(let d=1;d<=totalDays;d++)cells.push(d);
+                const dayMap={};
+                sessions.forEach(s=>{if(s.date.startsWith(calMonth))dayMap[parseInt(s.date.slice(8))]=s.dayName;});
+                const actMap={};
+                Object.entries(actEntries||{}).forEach(([date,acts])=>{if(date.startsWith(calMonth))actMap[parseInt(date.slice(8))]=acts;});
+                const prevMonth=()=>{const d=new Date(yr,mo-2,1);setCalMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);};
+                const nextMonth=()=>{const d=new Date(yr,mo,1);const now=new Date();if(d<=now)setCalMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);};
+                const monthNames=["","Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
+                return(
+                  <div style={S.card}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                      <p style={{margin:0,fontSize:9,letterSpacing:2,color:C.text3}}>📅 CALENDARIO MENSILE</p>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <button onClick={prevMonth} style={{background:"none",border:"none",color:C.text2,fontSize:18,cursor:"pointer",padding:"0 4px",lineHeight:1}}>‹</button>
+                        <span style={{fontSize:11,fontWeight:700,color:C.text}}>{monthNames[mo]} {yr}</span>
+                        <button onClick={nextMonth} style={{background:"none",border:"none",color:new Date(yr,mo,1)>new Date()?C.text4:C.text2,fontSize:18,cursor:"pointer",padding:"0 4px",lineHeight:1}}>›</button>
+                      </div>
+                    </div>
+                    {/* Intestazioni giorni */}
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:3}}>
+                      {["L","M","M","G","V","S","D"].map((d,i)=>(
+                        <div key={i} style={{textAlign:"center",fontSize:8,color:C.text4,padding:"2px 0"}}>{d}</div>
+                      ))}
+                    </div>
+                    {/* Celle giorni */}
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
+                      {cells.map((d,i)=>{
+                        if(!d)return<div key={i}/>;
+                        const hasGym=!!dayMap[d];
+                        const hasAct=!!actMap[d];
+                        const isToday=`${yr}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`===todayISO();
+                        const gymCol=dayMap[d]?(dayColorMap[dayMap[d]]||"#ef4444"):null;
+                        return(
+                          <div key={i} style={{
+                            aspectRatio:"1",borderRadius:6,
+                            background:hasGym?gymCol+"cc":hasAct?"#10b98166":C.bg3,
+                            border:isToday?"2px solid #ef4444":`1px solid ${C.border}`,
+                            display:"flex",alignItems:"center",justifyContent:"center",
+                            position:"relative",flexDirection:"column",gap:1
+                          }}>
+                            <span style={{fontSize:10,fontWeight:isToday?900:400,color:hasGym?"#fff":hasAct?"#10b981":C.text3,lineHeight:1}}>{d}</span>
+                            {hasAct&&!hasGym&&<span style={{fontSize:7,lineHeight:1}}>{ACT_ICONS[(actMap[d]||[])[0]?.type]||"🏅"}</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {/* Legenda */}
+                    <div style={{display:"flex",gap:12,marginTop:10,flexWrap:"wrap"}}>
+                      {[...new Set(Object.values(dayMap))].map(name=>(
+                        <div key={name} style={{display:"flex",alignItems:"center",gap:4}}>
+                          <div style={{width:10,height:10,borderRadius:3,background:dayColorMap[name]||"#ef4444"}}/>
+                          <span style={{fontSize:8,color:C.text3}}>{name}</span>
+                        </div>
+                      ))}
+                      {Object.keys(actMap).length>0&&<div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:10,height:10,borderRadius:3,background:"#10b98166"}}/><span style={{fontSize:8,color:C.text3}}>Attività</span></div>}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -4366,7 +4556,38 @@ function GymTracker(){
                   <button style={{...S.btn("red"),padding:"10px 24px",fontSize:11}} onClick={()=>setView("workout")}>→ VAI A WORKOUT</button>
                 </div>
               )}
-              {weekGroups.map(([wk,wkS])=><WeekGroup key={wk} weekKey={wk} weekSessions={wkS} program={program} actEntries={actEntries} onDeleteSession={deleteSession} onEditSession={setEditingSession} C={C} S={S}/>)}
+              {sessions.length>0&&(()=>{
+                const [histFilter,setHistFilter]=React.useState("");
+                const [histDay,setHistDay]=React.useState("tutti");
+                const dayNames=["tutti",...(program?.days||[]).map(d=>d.name)];
+                const filtered=weekGroups.map(([wk,wkS])=>{
+                  const fSess=wkS.filter(s=>{
+                    const dayOk=histDay==="tutti"||s.dayName===histDay;
+                    const textOk=!histFilter||s.exercises.some(e=>e.name.toLowerCase().includes(histFilter.toLowerCase()))||s.dayName.toLowerCase().includes(histFilter.toLowerCase());
+                    return dayOk&&textOk;
+                  });
+                  return[wk,fSess];
+                }).filter(([,wkS])=>wkS.length>0);
+                return(
+                  <>
+                    <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center"}}>
+                      <input style={{...S.inp,flex:1,padding:"9px 12px",fontSize:13}} placeholder="Cerca esercizio..." value={histFilter} onChange={e=>setHistFilter(e.target.value)}/>
+                      {histFilter&&<button onClick={()=>setHistFilter("")} style={{background:"none",border:"none",color:C.text3,fontSize:18,cursor:"pointer",padding:"0 4px",flexShrink:0}}>✕</button>}
+                    </div>
+                    {dayNames.length>2&&(
+                      <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:10}}>
+                        {dayNames.map(d=>(
+                          <button key={d} onClick={()=>setHistDay(d)} style={{padding:"5px 10px",borderRadius:6,border:`1px solid ${histDay===d?"#ef4444":C.border2}`,background:histDay===d?"#ef444420":"transparent",color:histDay===d?"#ef4444":C.text3,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:histDay===d?700:400}}>
+                            {d==="tutti"?"Tutti":d}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {filtered.length===0&&<p style={{fontSize:10,color:C.text4,textAlign:"center",padding:"16px 0"}}>Nessuna sessione trovata</p>}
+                    {filtered.map(([wk,wkS])=><WeekGroup key={wk} weekKey={wk} weekSessions={wkS} program={program} actEntries={actEntries} onDeleteSession={deleteSession} onEditSession={setEditingSession} C={C} S={S}/>)}
+                  </>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -4400,8 +4621,8 @@ function GymTracker(){
   }
 
   // ── WORKOUT DASHBOARD ──
-  const streak=getStreak(sessions);
-  const records=getRecords(sessions);
+  const streak=useMemo(()=>getStreak(sessions,actEntries),[sessions,actEntries]);
+  const records=useMemo(()=>getRecords(sessions),[sessions]);
   const lastSess=sessions.length?sessions[sessions.length-1]:null;
 
   const WorkoutInner=()=>{
@@ -4502,7 +4723,22 @@ function GymTracker(){
                       <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{muscles.map(m=><span key={m} style={S.tag(m)}>{m}</span>)}</div>
                       {lastDS&&<p style={{margin:"4px 0 0",fontSize:8,color:C.text4}}>Ultima volta: {lastDS.date}</p>}
                     </div>
-                    <button style={{...S.btn("red"),padding:"12px 16px",fontSize:12,background:dayCol,boxShadow:`0 4px 16px ${dayCol}60`,letterSpacing:2}} onClick={()=>startWorkout(di)}>▶ INIZIA</button>
+                    <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end"}}>
+                      <button style={{...S.btn("red"),padding:"12px 16px",fontSize:12,background:dayCol,boxShadow:`0 4px 16px ${dayCol}60`,letterSpacing:2}} onClick={()=>startWorkout(di)}>▶ INIZIA</button>
+                      {lastDS&&(
+                        <button style={{...S.btn("ghost"),padding:"6px 10px",fontSize:9,letterSpacing:1}} onClick={()=>{
+                          // pre-compila con i pesi dell'ultima sessione di questo giorno
+                          const prefilled={};
+                          lastDS.exercises.forEach(e=>{prefilled[e.name]={weight:e.weight,reps:e.reps,sets:e.sets};});
+                          // poi sovrascrivi con suggerimenti progressione dove disponibili
+                          program.days[di].exercises.forEach(ex=>{
+                            const sg=getSuggestion(ex.name,ex.minReps,ex.maxReps,ex.step,sessions);
+                            if(sg)prefilled[ex.name]={...prefilled[ex.name],weight:sg.nw,reps:sg.nr};
+                          });
+                          setLogData(prefilled);setActiveDay(di);setWorkoutStart(Date.now());setView("log");
+                        }}>🔁 RIPETI</button>
+                      )}
+                    </div>
                   </div>
                   <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
                     {day.exercises.map((ex,ei)=>{
@@ -4593,7 +4829,14 @@ function SetupWizard({S,C,initial,onSave,onCancel}){
       {tempEx.map((ex,i)=>(
         <div key={i} style={{...S.card,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px"}}>
           <div style={{display:"flex",alignItems:"center",gap:8}}><span style={S.tag(ex.muscle)}>{ex.muscle}</span><span style={{fontSize:13,fontWeight:600,color:C.text}}>{ex.name}</span></div>
-          <div style={{display:"flex",gap:6,alignItems:"center"}}><span style={{fontSize:9,color:C.text4}}>{ex.sets}×{ex.minReps}–{ex.maxReps}·+{ex.step||2.5}kg</span><button onClick={()=>setTempEx(t=>t.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:18,padding:"0 4px"}}>✕</button></div>
+          <div style={{display:"flex",gap:4,alignItems:"center"}}>
+            <span style={{fontSize:9,color:C.text4}}>{ex.sets}×{ex.minReps}–{ex.maxReps}·+{ex.step||2.5}kg</span>
+            <div style={{display:"flex",flexDirection:"column",gap:1}}>
+              <button onClick={()=>setTempEx(t=>{if(i===0)return t;const n=[...t];[n[i-1],n[i]]=[n[i],n[i-1]];return n;})} disabled={i===0} style={{background:"none",border:"none",color:i===0?C.text4:C.text2,cursor:i===0?"default":"pointer",fontSize:12,lineHeight:1,padding:"0 3px",fontFamily:"inherit"}}>▲</button>
+              <button onClick={()=>setTempEx(t=>{if(i===t.length-1)return t;const n=[...t];[n[i],n[i+1]]=[n[i+1],n[i]];return n;})} disabled={i===tempEx.length-1} style={{background:"none",border:"none",color:i===tempEx.length-1?C.text4:C.text2,cursor:i===tempEx.length-1?"default":"pointer",fontSize:12,lineHeight:1,padding:"0 3px",fontFamily:"inherit"}}>▼</button>
+            </div>
+            <button onClick={()=>setTempEx(t=>t.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:18,padding:"0 4px"}}>✕</button>
+          </div>
         </div>
       ))}
       <button style={{...S.btn(tempEx.length?"red":"ghost"),width:"100%",padding:14,fontSize:13,letterSpacing:2,marginTop:4}} onClick={tempEx.length?saveDay:undefined} disabled={!tempEx.length}>✓ SALVA GIORNO</button>
