@@ -1836,31 +1836,212 @@ function SurplusChart({nutrEntries,tdeeEntries,C}){
   );
 }
 
+
 // ══════════════════════════════════════════════
 // ── SCHERMATA FISICO ──
 // ══════════════════════════════════════════════
-function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,actEntries,setActEntries,tdeeEntries,setTdeeEntries}){
+
+// ── Daily Calorie Ring ──
+function CalRing({kcalIn,kcalOut,C}){
+  const pct=kcalOut>0?Math.min(kcalIn/kcalOut,1.3):0;
+  const r=44,circ=2*Math.PI*r;
+  const over=pct>1;
+  const col=over?"#f59e0b":kcalIn>0?"#10b981":"#444";
+  const bal=kcalIn-kcalOut;
+  return(
+    <div style={{position:"relative",width:100,height:100,flexShrink:0}}>
+      <svg width={100} height={100} style={{transform:"rotate(-90deg)"}}>
+        <circle cx={50} cy={50} r={r} fill="none" stroke={C.bg4} strokeWidth={8}/>
+        <circle cx={50} cy={50} r={r} fill="none" stroke={col} strokeWidth={8}
+          strokeDasharray={circ} strokeDashoffset={circ*(1-Math.min(pct,1))}
+          strokeLinecap="round" style={{transition:"stroke-dashoffset 0.8s ease"}}/>
+      </svg>
+      <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+        {kcalIn>0&&kcalOut>0?(
+          <>
+            <span style={{fontSize:10,fontWeight:900,color:over?"#f59e0b":bal<0?"#10b981":"#ef4444",lineHeight:1}}>{bal>0?"+":""}{bal}</span>
+            <span style={{fontSize:7,color:C.text3,letterSpacing:1}}>{over?"SURPLUS":"DEFICIT"}</span>
+          </>
+        ):<span style={{fontSize:8,color:C.text4}}>—</span>}
+      </div>
+    </div>
+  );
+}
+
+// ── Macro Bar ──
+function MacroBar({prot,carb,fat,kcal,bwKg,C}){
+  if(!kcal)return null;
+  const protCal=prot*4,carbCal=carb*4,fatCal=fat*9;
+  const protPct=Math.round(protCal/kcal*100)||0;
+  const carbPct=Math.round(carbCal/kcal*100)||0;
+  const fatPct=Math.round(fatCal/kcal*100)||0;
+  const protTarget=bwKg?Math.round(bwKg*1.8):140;
+  const protOk=prot>=protTarget*0.9;
+  return(
+    <div>
+      <div style={{height:10,borderRadius:5,background:C.bg4,overflow:"hidden",display:"flex",marginBottom:8}}>
+        <div style={{height:"100%",width:`${protPct}%`,background:"#ef4444",transition:"width 0.5s"}}/>
+        <div style={{height:"100%",width:`${carbPct}%`,background:"#f59e0b",transition:"width 0.5s"}}/>
+        <div style={{height:"100%",width:`${fatPct}%`,background:"#3b82f6",transition:"width 0.5s"}}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+        {[["🥩 Prot",prot+"g",`${protPct}%`,"#ef4444",!protOk],
+          ["🍞 Carb",carb+"g",`${carbPct}%`,"#f59e0b",false],
+          ["🧈 Grassi",fat+"g",`${fatPct}%`,"#3b82f6",false]].map(([l,v,p,col,warn])=>(
+          <div key={l} style={{background:col+"14",borderRadius:8,padding:"6px 8px",border:warn?`1px solid ${col}55`:"none"}}>
+            <p style={{margin:0,fontSize:8,color:col,letterSpacing:0}}>{l}{warn?" ⚠":""}</p>
+            <p style={{margin:0,fontSize:14,fontWeight:900,color:col,lineHeight:1.2}}>{v}</p>
+            <p style={{margin:0,fontSize:8,color:col,opacity:0.7}}>{p}</p>
+          </div>
+        ))}
+      </div>
+      {bwKg&&!protOk&&(
+        <p style={{margin:"6px 0 0",fontSize:9,color:"#f59e0b",lineHeight:1.4}}>
+          ⚠ Proteine basse: {prot}g su {protTarget}g target ({bwKg}kg × 1.8). Aggiungi ~{protTarget-prot}g.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Activity Burn Summary ──
+function ActivityBurnRow({acts,gymKcal,tdeeManual,C}){
+  const actKcal=acts.reduce((t,a)=>t+(a.kcal||0),0);
+  const actMin=acts.reduce((t,a)=>t+(a.min||0),0);
+  const total=tdeeManual||(actKcal+(gymKcal||0));
+  return(
+    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+      {gymKcal>0&&<span style={{fontSize:10,background:"#ef444420",color:"#ef4444",borderRadius:6,padding:"3px 8px"}}>🏋 {gymKcal} kcal</span>}
+      {acts.map((a,i)=><span key={i} style={{fontSize:10,background:"#10b98120",color:"#10b981",borderRadius:6,padding:"3px 8px"}}>{ACT_ICONS[a.type]||"🏅"} {a.type} {a.kcal>0?a.kcal+"kcal":""} {a.min>0?a.min+"min":""}</span>)}
+      {tdeeManual&&<span style={{fontSize:10,background:"#3b82f620",color:"#3b82f6",borderRadius:6,padding:"3px 8px"}}>📱 TDEE manuale</span>}
+      {total>0&&<span style={{fontSize:10,fontWeight:700,color:C.text2,marginLeft:"auto"}}>Tot: {total} kcal</span>}
+    </div>
+  );
+}
+
+// ── 14-day calorie timeline ──
+function CalTimeline({nutrEntries,tdeeEntries,actEntries,sessions,C}){
+  const days=[];
+  for(let i=13;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days.push(d.toISOString().slice(0,10));}
+  const data=days.map(date=>{
+    const n=nutrEntries[date];
+    const acts=actEntries[date]||[];
+    const gym=sessions.filter(s=>s.date===date).reduce((t,s)=>t+(s.kcal||0),0);
+    const actBurn=acts.reduce((t,a)=>t+(a.kcal||0),0);
+    const kcalOut=tdeeEntries[date]||(gym+actBurn)||null;
+    const kcalIn=n?.kcal||null;
+    const bal=kcalIn&&kcalOut?kcalIn-kcalOut:null;
+    return{date,kcalIn,kcalOut,bal,prot:n?.prot||0,hasGym:sessions.some(s=>s.date===date),hasAct:acts.length>0};
+  });
+  const hasAny=data.some(d=>d.kcalIn||d.kcalOut);
+  if(!hasAny)return<p style={{fontSize:9,color:C.text4,textAlign:"center",padding:"16px 0"}}>Nessun dato ancora</p>;
+  const maxKcal=Math.max(...data.map(d=>Math.max(d.kcalIn||0,d.kcalOut||0)),1);
+  const W=320,H=80,PX=4;
+  const bw=(W-PX*2)/14-2;
+  const dl=["L","M","M","G","V","S","D"];
+  return(
+    <div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H+28}`} style={{display:"block",overflow:"visible"}}>
+        {data.map((d,i)=>{
+          const x=PX+i*((W-PX*2)/14)+(((W-PX*2)/14)-bw)/2;
+          const hIn=d.kcalIn?(d.kcalIn/maxKcal)*(H-4):0;
+          const hOut=d.kcalOut?(d.kcalOut/maxKcal)*(H-4):0;
+          const surplus=d.bal!=null&&d.bal>0;
+          const deficit=d.bal!=null&&d.bal<=0;
+          const isToday=d.date===days[13];
+          return(
+            <g key={d.date}>
+              {/* out bar (background) */}
+              {hOut>0&&<rect x={x} y={H-hOut} width={bw} height={hOut} fill={C.bg4} rx={2}/>}
+              {/* in bar (foreground) */}
+              {hIn>0&&<rect x={x} y={H-hIn} width={bw} height={hIn} fill={surplus?"#f59e0b":deficit?"#10b981":"#ef4444"} opacity={isToday?1:0.7} rx={2}/>}
+              {/* activity dot */}
+              {(d.hasGym||d.hasAct)&&<circle cx={x+bw/2} cy={H+5} r={2.5} fill={d.hasGym?"#ef4444":"#10b981"}/>}
+              {/* day label */}
+              <text x={x+bw/2} y={H+18} fill={isToday?"#ef4444":C.text3} fontSize={7} textAnchor="middle" fontWeight={isToday?700:400}>
+                {isToday?"●":dl[new Date(d.date).getDay()]}
+              </text>
+              {/* date label every 7 */}
+              {(i===0||i===6||i===13)&&<text x={x+bw/2} y={H+27} fill={C.text4} fontSize={6} textAnchor="middle">{d.date.slice(5)}</text>}
+            </g>
+          );
+        })}
+      </svg>
+      <div style={{display:"flex",gap:12,justifyContent:"center",marginTop:4}}>
+        {[["#f59e0b","Surplus"],["#10b981","Deficit"],["#ef4444","Mangiato (no out)"],["#ef4444","Allenamento","circle"],["#10b981","Attività","circle"]].slice(0,4).map(([col,lbl])=>(
+          <div key={lbl} style={{display:"flex",alignItems:"center",gap:4}}>
+            <div style={{width:8,height:8,borderRadius:2,background:col}}/>
+            <span style={{fontSize:7,color:C.text3}}>{lbl}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Protein 7-day streak ──
+function ProtStreak({nutrEntries,bwKg,C}){
+  const target=bwKg?Math.round(bwKg*1.8):140;
+  const days=[];
+  for(let i=6;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days.push(d.toISOString().slice(0,10));}
+  const streak=days.map(date=>{
+    const n=nutrEntries[date];
+    const ok=n&&n.prot>=target*0.9;
+    return{date,prot:n?.prot||0,ok,dl:["D","L","M","M","G","V","S"][new Date(date).getDay()]};
+  });
+  const cnt=streak.filter(d=>d.ok).length;
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:10}}>
+      <div style={{flex:1}}>
+        <p style={{margin:"0 0 6px",fontSize:8,letterSpacing:2,color:C.text3}}>PROTEINE — ULTIMI 7 GIORNI (target {target}g)</p>
+        <div style={{display:"flex",gap:4}}>
+          {streak.map(d=>(
+            <div key={d.date} style={{flex:1,textAlign:"center"}}>
+              <div style={{width:"100%",paddingBottom:"100%",position:"relative",marginBottom:3}}>
+                <div style={{position:"absolute",inset:0,borderRadius:6,background:d.ok?"#10b981":d.prot>0?"#ef444440":C.bg4,border:d.ok?"none":`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  {d.prot>0&&<span style={{fontSize:8,fontWeight:700,color:d.ok?"#fff":"#ef4444"}}>{d.prot}</span>}
+                </div>
+              </div>
+              <span style={{fontSize:7,color:C.text4}}>{d.dl}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{textAlign:"center",flexShrink:0}}>
+        <p style={{margin:0,fontSize:22,fontWeight:900,color:cnt>=5?"#10b981":cnt>=3?"#f59e0b":"#ef4444"}}>{cnt}/7</p>
+        <p style={{margin:0,fontSize:7,color:C.text3}}>giorni OK</p>
+      </div>
+    </div>
+  );
+}
+
+function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,actEntries,setActEntries,tdeeEntries,setTdeeEntries,sessions}){
   const [height,setHeight]=useState(()=>db("il_height")||"");
-  const [tab,setTab]=useState("peso");
+  const [tab,setTab]=useState("giorno");
   const today=todayISO();
+  const [selDate,setSelDate]=useState(today);
 
   // peso form
   const [wVal,setWVal]=useState("");const [fatVal,setFatVal]=useState("");const [leanVal,setLeanVal]=useState("");
   const [weightDate,setWeightDate]=useState(today);
-  // nutr form
-  const [nutrDate,setNutrDate]=useState(today);
+  // nutr form (linked to selDate)
   const [kcalIn,setKcalIn]=useState(()=>(nutrEntries[today]?.kcal)||"");
   const [prot,setProt]=useState(()=>(nutrEntries[today]?.prot)||"");
   const [carb,setCarb]=useState(()=>(nutrEntries[today]?.carb)||"");
   const [fat,setFat]=useState(()=>(nutrEntries[today]?.fat)||"");
+  const loadNutr=(date)=>{
+    const ex=nutrEntries[date];
+    setKcalIn(ex?.kcal||"");setProt(ex?.prot||"");setCarb(ex?.carb||"");setFat(ex?.fat||"");
+  };
   // attività form
   const [actType,setActType]=useState(ACTIVITIES[0]);
   const [actKcal,setActKcal]=useState("");
   const [actMin,setActMin]=useState("");
-  const [actDate,setActDate]=useState(today);
   // calorie bruciate totali giornata
   const [tdeeVal,setTdeeVal]=useState(()=>tdeeEntries[today]||"");
-  const [tdeeDate,setTdeeDate]=useState(today);
+
+  const lastBw=bwEntries.length?bwEntries[bwEntries.length-1]:null;
+  const bwKg=lastBw?.w||null;
 
   const addWeight=()=>{
     if(!wVal)return;
@@ -1868,19 +2049,21 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
     const updated=[...bwEntries.filter(x=>x.date!==weightDate),e].sort((a,b)=>a.date.localeCompare(b.date));
     setBwEntries(updated);setWVal("");setFatVal("");setLeanVal("");
   };
-  const deleteWeight=(date)=>{
-    setBwEntries(bwEntries.filter(x=>x.date!==date));
-  };
+  const deleteWeight=(date)=>setBwEntries(bwEntries.filter(x=>x.date!==date));
+
   const saveNutr=()=>{
-    setNutrEntries({...nutrEntries,[nutrDate]:{kcal:parseInt(kcalIn)||0,prot:parseInt(prot)||0,carb:parseInt(carb)||0,fat:parseInt(fat)||0}});
+    const p=parseInt(prot)||0,c=parseInt(carb)||0,f=parseInt(fat)||0;
+    const macroKcal=p*4+c*4+f*9;
+    const finalKcal=parseInt(kcalIn)||macroKcal||0;
+    setNutrEntries({...nutrEntries,[selDate]:{kcal:finalKcal,prot:p,carb:c,fat:f}});
   };
   const deleteNutr=(date)=>{
     const updated={...nutrEntries};delete updated[date];setNutrEntries(updated);
   };
   const addActivity=()=>{
     if(!actMin)return;
-    const day=actEntries[actDate]||[];
-    const updated={...actEntries,[actDate]:[...day,{type:actType,kcal:parseInt(actKcal)||0,min:parseInt(actMin)||0,id:Date.now()}]};
+    const day=actEntries[selDate]||[];
+    const updated={...actEntries,[selDate]:[...day,{type:actType,kcal:parseInt(actKcal)||0,min:parseInt(actMin)||0,id:Date.now()}]};
     setActEntries(updated);setActKcal("");setActMin("");
   };
   const deleteActivity=(date,id)=>{
@@ -1890,44 +2073,262 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
   };
   const saveTdee=()=>{
     if(!tdeeVal)return;
-    setTdeeEntries({...tdeeEntries,[tdeeDate]:parseInt(tdeeVal)||0});
+    setTdeeEntries({...tdeeEntries,[selDate]:parseInt(tdeeVal)||0});
   };
   const deleteTdee=(date)=>{
     const updated={...tdeeEntries};delete updated[date];setTdeeEntries(updated);
   };
 
-  const lastBw=bwEntries.length?bwEntries[bwEntries.length-1]:null;
-  const todayActs=actEntries[today]||[];
-  const todayKcalOut=todayActs.reduce((t,a)=>t+(a.kcal||0),0);
-  const todayNutr=nutrEntries[today];
-  // calcolo surplus/deficit: usa tdee manuale se disponibile, altrimenti somma attività
-  const todayTdee=tdeeEntries[today]||todayKcalOut||null;
-  const todaySurplus=todayNutr&&todayTdee?(todayNutr.kcal-todayTdee):null;
-  // per la data selezionata nel form calorie bruciate
-  const tdeeDateActs=actEntries[tdeeDate]||[];
-  const tdeeDateKcalOut=tdeeDateActs.reduce((t,a)=>t+(a.kcal||0),0);
+  // change selected date and load data
+  const changeDate=(date)=>{
+    setSelDate(date);
+    loadNutr(date);
+    setTdeeVal(tdeeEntries[date]||"");
+  };
 
-  const tabs=[["peso","⚖"],["nutrizione","🍎"],["attività","🏃"],["calorie","🔥"]];
+  // derived data for selDate
+  const selNutr=nutrEntries[selDate];
+  const selActs=actEntries[selDate]||[];
+  const selGymSess=(sessions||[]).filter(s=>s.date===selDate);
+  const selGymKcal=selGymSess.reduce((t,s)=>t+(s.kcal||0),0);
+  const selActKcal=selActs.reduce((t,a)=>t+(a.kcal||0),0);
+  const selTdeeManual=tdeeEntries[selDate]||null;
+  // TDEE stimato: usa BMR (Mifflin-St Jeor) + attività registrate se non c'è TDEE manuale
+  const heightCm=parseInt(height)||175;
+  const bmrVal=bwKg?calcBMR(bwKg,heightCm,30,true):null;
+  const tdeeEstimated=!selTdeeManual&&bmrVal?(Math.round(bmrVal*1.3)+selGymKcal+selActKcal):null;
+  const selKcalOut=selTdeeManual||(tdeeEstimated)||((selGymKcal+selActKcal)||null);
+  const isTdeeEstimated=!selTdeeManual&&!!tdeeEstimated;
+  const selKcalIn=selNutr?.kcal||null;
+  const selBal=selKcalIn&&selKcalOut?selKcalIn-selKcalOut:null;
+  const isToday=selDate===today;
+
+  // navigate days
+  const prevDay=()=>{const d=new Date(selDate);d.setDate(d.getDate()-1);changeDate(d.toISOString().slice(0,10));};
+  const nextDay=()=>{const d=new Date(selDate);d.setDate(d.getDate()+1);if(d.toISOString().slice(0,10)<=today)changeDate(d.toISOString().slice(0,10));};
+
+  const tabs=[["giorno","📅 GIORNO"],["settimana","📊 TREND"],["peso","⚖ CORPO"]];
+
   return(
     <div style={S.app}>
       <div style={{...S.wrap,paddingTop:14}}>
-        <div style={{display:"flex",gap:6,marginBottom:16,background:C.bg3,borderRadius:10,padding:4}}>
-          {tabs.map(([k,icon])=>(
-            <button key={k} onClick={()=>setTab(k)} style={{flex:1,padding:"7px 2px",borderRadius:8,border:"none",background:tab===k?C.bg2:"transparent",color:tab===k?C.text:C.text3,fontSize:9,fontWeight:tab===k?700:400,cursor:"pointer",fontFamily:"inherit",letterSpacing:0.5,transition:"all 0.15s"}}>
-              {icon} {k.toUpperCase()}
-            </button>
+        {/* Tab selector */}
+        <div style={{display:"flex",gap:4,marginBottom:14,background:C.bg3,borderRadius:10,padding:4}}>
+          {tabs.map(([k,l])=>(
+            <button key={k} onClick={()=>setTab(k)} style={{flex:1,padding:"8px 4px",borderRadius:8,border:"none",background:tab===k?C.bg2:"transparent",color:tab===k?C.text:C.text3,fontSize:10,fontWeight:tab===k?700:400,cursor:"pointer",fontFamily:"inherit",letterSpacing:0.5,transition:"all 0.15s"}}>{l}</button>
           ))}
         </div>
 
-        {/* ── TAB PESO ── */}
+        {/* ── TAB GIORNO ── */}
+        {tab==="giorno"&&(
+          <div className="fade-up">
+            {/* Day navigator */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+              <button onClick={prevDay} style={{background:"none",border:"none",color:C.text2,fontSize:22,cursor:"pointer",padding:"0 8px",lineHeight:1}}>‹</button>
+              <div style={{textAlign:"center"}}>
+                <p style={{margin:0,fontSize:14,fontWeight:700,color:isToday?"#ef4444":C.text}}>{isToday?"OGGI":selDate}</p>
+                {isToday&&<p style={{margin:0,fontSize:9,color:C.text3}}>{selDate}</p>}
+              </div>
+              <button onClick={nextDay} style={{background:"none",border:"none",color:selDate>=today?C.text4:C.text2,fontSize:22,cursor:"pointer",padding:"0 8px",lineHeight:1}}>›</button>
+            </div>
+
+            {/* Bilancio calorico unificato */}
+            <div style={{...S.card,marginBottom:10}}>
+              <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:12}}>
+                <CalRing kcalIn={selKcalIn||0} kcalOut={selKcalOut||0} C={C}/>
+                <div style={{flex:1}}>
+                  <p style={{margin:"0 0 8px",fontSize:8,letterSpacing:2,color:C.text3}}>BILANCIO CALORICO</p>
+                  <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                    <div>
+                      <p style={{margin:0,fontSize:7,color:"#f97316",letterSpacing:1}}>MANGIATO</p>
+                      <p style={{margin:0,fontSize:20,fontWeight:900,color:"#f97316",lineHeight:1}}>{selKcalIn||"—"}</p>
+                    </div>
+                    <div style={{color:C.text4,fontSize:18,alignSelf:"center"}}>vs</div>
+                    <div>
+                      <p style={{margin:0,fontSize:7,color:"#3b82f6",letterSpacing:1}}>BRUCIATO{isTdeeEstimated?" (stima)":""}</p>
+                      <p style={{margin:0,fontSize:20,fontWeight:900,color:"#3b82f6",lineHeight:1}}>{selKcalOut||"—"}</p>
+                      {isTdeeEstimated&&<p style={{margin:0,fontSize:7,color:C.text4}}>BMR+attività</p>}
+                    </div>
+                  </div>
+                  {selBal!=null&&(
+                    <div style={{marginTop:6,background:selBal>0?"#f59e0b18":"#10b98118",borderRadius:6,padding:"4px 10px",display:"inline-block",border:`1px solid ${selBal>0?"#f59e0b44":"#10b98144"}`}}>
+                      <span style={{fontSize:11,fontWeight:900,color:selBal>0?"#f59e0b":"#10b981"}}>{selBal>0?"▲ SURPLUS":"▼ DEFICIT"} {Math.abs(selBal)} kcal</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+              {/* Attività del giorno */}
+              {(selGymKcal>0||selActs.length>0||selTdeeManual)&&(
+                <ActivityBurnRow acts={selActs} gymKcal={selGymKcal} tdeeManual={selTdeeManual} C={C}/>
+              )}
+            </div>
+
+            {/* Macro breakdown */}
+            {selNutr&&(
+              <div style={{...S.card,marginBottom:10}}>
+                <p style={{margin:"0 0 10px",fontSize:8,letterSpacing:2,color:C.text3}}>MACRONUTRIENTI</p>
+                <MacroBar prot={selNutr.prot} carb={selNutr.carb} fat={selNutr.fat} kcal={selNutr.kcal} bwKg={bwKg} C={C}/>
+              </div>
+            )}
+
+            {/* Form inserimento nutrizione */}
+            <div style={{...S.card,marginBottom:10}}>
+              <p style={{margin:"0 0 10px",fontSize:8,letterSpacing:2,color:C.text3}}>🍽 INSERISCI PASTI — {selDate}</p>
+              {(()=>{
+                const p=parseInt(prot)||0,c=parseInt(carb)||0,f=parseInt(fat)||0;
+                const macroKcal=p*4+c*4+f*9;
+                const discrepancy=kcalIn&&macroKcal>0?Math.abs(parseInt(kcalIn)-macroKcal):0;
+                const protTarget=bwKg?Math.round(bwKg*1.8):140;
+                return(
+                  <>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                      <div>
+                        <label style={S.lbl}>🥩 Proteine (g)</label>
+                        <input type="number" inputMode="numeric" style={{...S.inp,borderColor:p>=protTarget?"#10b981":p>=protTarget*0.8?"#f59e0b":C.border2}} placeholder={String(protTarget)} value={prot} onChange={e=>setProt(e.target.value)}/>
+                        {p>0&&<p style={{margin:"3px 0 0",fontSize:8,color:p>=protTarget?"#10b981":"#f59e0b"}}>{p>=protTarget?"✓ target":p>=protTarget*0.8?"quasi":`−${protTarget-p}g al target`}</p>}
+                      </div>
+                      <div>
+                        <label style={S.lbl}>🍞 Carboidrati (g)</label>
+                        <input type="number" inputMode="numeric" style={S.inp} placeholder="220" value={carb} onChange={e=>setCarb(e.target.value)}/>
+                      </div>
+                      <div>
+                        <label style={S.lbl}>🧈 Grassi (g)</label>
+                        <input type="number" inputMode="numeric" style={S.inp} placeholder="70" value={fat} onChange={e=>setFat(e.target.value)}/>
+                      </div>
+                      <div>
+                        <label style={S.lbl}>🔥 Calorie (kcal)</label>
+                        <input type="number" inputMode="numeric" style={{...S.inp,borderColor:discrepancy>150?"#f59e0b":C.border2}} placeholder={macroKcal>0?String(macroKcal):"2200"} value={kcalIn} onChange={e=>setKcalIn(e.target.value)}/>
+                        {macroKcal>0&&<p style={{margin:"3px 0 0",fontSize:8,color:discrepancy>150?"#f59e0b":C.text4}}>dai macro: {macroKcal} kcal{discrepancy>150?` ⚠ diff. ${discrepancy}`:""}</p>}
+                      </div>
+                    </div>
+                    {/* Live macro preview */}
+                    {macroKcal>0&&(
+                      <div style={{height:6,borderRadius:3,background:C.bg4,overflow:"hidden",display:"flex",marginBottom:8}}>
+                        {[[p*4,"#ef4444"],[c*4,"#f59e0b"],[f*9,"#3b82f6"]].map(([cal,col],i)=>(
+                          <div key={i} style={{height:"100%",width:`${Math.round(cal/macroKcal*100)||0}%`,background:col,transition:"width 0.3s"}}/>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+              <button style={{...S.btn("red"),width:"100%",padding:12}} onClick={saveNutr}>💾 SALVA</button>
+              {selNutr&&<button style={{...S.btn("ghost"),width:"100%",padding:8,marginTop:6,fontSize:9}} onClick={()=>deleteNutr(selDate)}>🗑 Cancella dati nutrizione</button>}
+            </div>
+
+            {/* Form attività */}
+            <div style={{...S.card,marginBottom:10}}>
+              <p style={{margin:"0 0 10px",fontSize:8,letterSpacing:2,color:C.text3}}>🏃 ATTIVITÀ EXTRA — {selDate}</p>
+              {selActs.length>0&&(
+                <div style={{marginBottom:10}}>
+                  {selActs.map((a,i)=>(
+                    <div key={a.id||i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:`1px solid ${C.border}`}}>
+                      <span style={{fontSize:11}}>{ACT_ICONS[a.type]||"🏅"} <span style={{color:C.text2,fontWeight:600}}>{a.type}</span></span>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                        {a.min>0&&<span style={{fontSize:10,color:C.text3}}>⏱{a.min}min</span>}
+                        {a.kcal>0&&<span style={{fontSize:10,color:"#f97316"}}>🔥{a.kcal}</span>}
+                        <button onClick={()=>deleteActivity(selDate,a.id)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14,padding:"0 2px"}}>🗑</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div>
+                  <label style={S.lbl}>Tipo</label>
+                  <select style={S.inp} value={actType} onChange={e=>setActType(e.target.value)}>
+                    {ACTIVITIES.map(a=><option key={a} value={a}>{a}</option>)}
+                  </select>
+                </div>
+                <div><label style={S.lbl}>⏱ Minuti</label><input type="number" inputMode="numeric" style={S.inp} placeholder="60" value={actMin} onChange={e=>setActMin(e.target.value)}/></div>
+                <div><label style={S.lbl}>🔥 Kcal (opz.)</label><input type="number" inputMode="numeric" style={S.inp} placeholder="400" value={actKcal} onChange={e=>setActKcal(e.target.value)}/></div>
+              </div>
+              <button style={{...S.btn("red"),width:"100%",padding:12}} onClick={addActivity}>+ AGGIUNGI ATTIVITÀ</button>
+            </div>
+
+            {/* Form TDEE manuale */}
+            <div style={{...S.card,borderLeft:"3px solid #3b82f6"}}>
+              <p style={{margin:"0 0 4px",fontSize:8,letterSpacing:2,color:"#3b82f6"}}>📱 TDEE TOTALE GIORNALIERO (opzionale)</p>
+              <p style={{margin:"0 0 10px",fontSize:9,color:C.text3,lineHeight:1.4}}>Se hai un tracker (Garmin, Apple Watch ecc.) inserisci qui il totale kcal bruciate. Sovrascrive il calcolo automatico.</p>
+              <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+                <div style={{flex:1}}>
+                  <label style={S.lbl}>Kcal totali bruciate</label>
+                  <input type="number" inputMode="numeric" style={S.inp} placeholder="es. 2500" value={tdeeVal} onChange={e=>setTdeeVal(e.target.value)}/>
+                </div>
+                <button style={{...S.btn("red"),padding:"11px 14px",flexShrink:0}} onClick={saveTdee}>💾</button>
+                {selTdeeManual&&<button style={{...S.btn("ghost"),padding:"11px 10px",flexShrink:0}} onClick={()=>deleteTdee(selDate)}>🗑</button>}
+              </div>
+              {selTdeeManual&&<p style={{margin:"6px 0 0",fontSize:9,color:"#3b82f6"}}>✓ {selTdeeManual} kcal registrate</p>}
+            </div>
+          </div>
+        )}
+
+        {/* ── TAB TREND ── */}
+        {tab==="settimana"&&(
+          <div className="fade-up">
+            {/* Protein streak */}
+            <div style={S.card}>
+              <ProtStreak nutrEntries={nutrEntries} bwKg={bwKg} C={C}/>
+            </div>
+
+            {/* Timeline 14 giorni */}
+            <div style={S.card}>
+              <p style={{margin:"0 0 10px",fontSize:8,letterSpacing:2,color:C.text3}}>CALORIE — ULTIMI 14 GIORNI</p>
+              <CalTimeline nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} actEntries={actEntries} sessions={sessions||[]} C={C}/>
+            </div>
+
+            {/* NutrChart esistente */}
+            {Object.keys(nutrEntries).length>=2&&(
+              <div style={S.card}>
+                <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 12px"}}>TREND NUTRIZIONE — 30 GIORNI</p>
+                <NutrChart nutrEntries={nutrEntries} C={C}/>
+              </div>
+            )}
+
+            {/* SurplusChart esistente */}
+            <div style={S.card}>
+              <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 10px"}}>SURPLUS / DEFICIT — ULTIMI 14 GIORNI</p>
+              <SurplusChart nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} C={C}/>
+            </div>
+
+            {/* Storico nutrizione compatto */}
+            {Object.keys(nutrEntries).length>0&&(
+              <div style={S.card}>
+                <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 10px"}}>STORICO NUTRIZIONE</p>
+                {Object.entries(nutrEntries).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,14).map(([date,n])=>{
+                  const tdeeOut=tdeeEntries[date]||null;
+                  const acts=actEntries[date]||[];
+                  const gymK=(sessions||[]).filter(s=>s.date===date).reduce((t,s)=>t+(s.kcal||0),0);
+                  const actK=acts.reduce((t,a)=>t+(a.kcal||0),0);
+                  const out=tdeeOut||(gymK+actK)||null;
+                  const bal=out?n.kcal-out:null;
+                  return(
+                    <div key={date} onClick={()=>{setTab("giorno");changeDate(date);}} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.border}`,cursor:"pointer"}}>
+                      <div>
+                        <span style={{fontSize:10,color:C.text3,display:"block"}}>{date}</span>
+                        <span style={{fontSize:9,color:"#ef4444"}}>{n.prot}g P · {n.carb}g C · {n.fat}g F</span>
+                      </div>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                        <span style={{fontSize:12,fontWeight:700,color:"#f97316"}}>{n.kcal}</span>
+                        {bal!=null&&<span style={{fontSize:10,fontWeight:700,color:bal>0?"#f59e0b":"#10b981",background:bal>0?"#f59e0b18":"#10b98118",borderRadius:4,padding:"1px 6px"}}>{bal>0?"+":""}{bal}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── TAB CORPO ── */}
         {tab==="peso"&&(
           <div className="fade-up">
             {lastBw&&(
               <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:12}}>
-                {[["⚖ PESO",lastBw.w+"kg"],lastBw.fat?["🔥 MASSA GRASSA",lastBw.fat+"%"]:null,lastBw.lean?["💪 MASSA MAGRA",lastBw.lean+"kg"]:null,lastBw.bmi?["📊 BMI",""+lastBw.bmi]:null].filter(Boolean).map(([l,v])=>(
+                {[["⚖ PESO",lastBw.w+"kg","#ef4444"],lastBw.fat?["🔥 GRASSO",lastBw.fat+"%","#f97316"]:null,lastBw.lean?["💪 MAGRA",lastBw.lean+"kg","#10b981"]:null,lastBw.bmi?["📊 BMI",""+lastBw.bmi,"#8b5cf6"]:null].filter(Boolean).map(([l,v,col])=>(
                   <div key={l} style={{...S.card,textAlign:"center",padding:"10px 8px",marginBottom:0}}>
                     <p style={{margin:"0 0 2px",fontSize:8,color:C.text3,letterSpacing:1}}>{l}</p>
-                    <p style={{margin:0,fontSize:18,fontWeight:900,color:"#ef4444"}}>{v}</p>
+                    <p style={{margin:0,fontSize:18,fontWeight:900,color:col}}>{v}</p>
                   </div>
                 ))}
               </div>
@@ -1971,205 +2372,6 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
           </div>
         )}
 
-        {/* ── TAB NUTRIZIONE ── */}
-        {tab==="nutrizione"&&(
-          <div className="fade-up">
-            {nutrEntries[nutrDate]&&(
-              <div style={{...S.card,marginBottom:12}}>
-                <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 10px"}}>{nutrDate===today?"OGGI":"DATA SELEZIONATA"} — {nutrDate}</p>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:10}}>
-                  {[["KCAL",nutrEntries[nutrDate].kcal,"#f97316"],["PROT.",nutrEntries[nutrDate].prot+"g","#ef4444"],["CARB.",nutrEntries[nutrDate].carb+"g","#f59e0b"],["GRASSI",nutrEntries[nutrDate].fat+"g","#3b82f6"]].map(([l,v,col])=>(
-                    <div key={l} style={{background:C.bg3,borderRadius:8,padding:"8px 6px",textAlign:"center"}}>
-                      <p style={{margin:0,fontSize:7,color:C.text3,letterSpacing:1}}>{l}</p>
-                      <p style={{margin:0,fontSize:15,fontWeight:900,color:col}}>{v}</p>
-                    </div>
-                  ))}
-                </div>
-                {nutrEntries[nutrDate].kcal>0&&(
-                  <div style={{height:8,borderRadius:4,background:C.bg4,overflow:"hidden",display:"flex"}}>
-                    {[["prot",nutrEntries[nutrDate].prot*4,"#ef4444"],["carb",nutrEntries[nutrDate].carb*4,"#f59e0b"],["fat",nutrEntries[nutrDate].fat*9,"#3b82f6"]].map(([k,cal,col])=>(
-                      <div key={k} style={{height:"100%",width:`${Math.round(cal/nutrEntries[nutrDate].kcal*100)}%`,background:col}}/>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            <div style={S.card}>
-              <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 12px"}}>INSERISCI PASTI</p>
-              <label style={S.lbl}>📅 Data</label>
-              <input type="date" style={{...S.inp,marginBottom:10}} value={nutrDate} max={today} onChange={e=>{
-                const nd=e.target.value;setNutrDate(nd);
-                const ex=nutrEntries[nd];
-                setKcalIn(ex?.kcal||"");setProt(ex?.prot||"");setCarb(ex?.carb||"");setFat(ex?.fat||"");
-              }}/>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-                <div><label style={S.lbl}>🔥 Calorie (kcal)</label><input type="number" inputMode="numeric" style={S.inp} placeholder="2200" value={kcalIn} onChange={e=>setKcalIn(e.target.value)}/></div>
-                <div><label style={S.lbl}>🥩 Proteine (g)</label><input type="number" inputMode="numeric" style={S.inp} placeholder="160" value={prot} onChange={e=>setProt(e.target.value)}/></div>
-                <div><label style={S.lbl}>🍞 Carboidrati (g)</label><input type="number" inputMode="numeric" style={S.inp} placeholder="220" value={carb} onChange={e=>setCarb(e.target.value)}/></div>
-                <div><label style={S.lbl}>🧈 Grassi (g)</label><input type="number" inputMode="numeric" style={S.inp} placeholder="70" value={fat} onChange={e=>setFat(e.target.value)}/></div>
-              </div>
-              <button style={{...S.btn("red"),width:"100%",padding:12}} onClick={saveNutr}>💾 SALVA</button>
-            </div>
-            {Object.keys(nutrEntries).length>=2&&(
-              <div style={S.card}>
-                <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 12px"}}>TREND NUTRIZIONE — 30 GIORNI</p>
-                <NutrChart nutrEntries={nutrEntries} C={C}/>
-              </div>
-            )}
-            {Object.keys(nutrEntries).length>0&&(
-              <div style={S.card}>
-                <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 10px"}}>STORICO NUTRIZIONE</p>
-                {Object.entries(nutrEntries).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,14).map(([date,n])=>(
-                  <div key={date} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${C.border}`}}>
-                    <span style={{fontSize:10,color:C.text3,flexShrink:0}}>{date}</span>
-                    <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
-                      <span style={{fontSize:11,fontWeight:700,color:"#f97316"}}>{n.kcal} kcal</span>
-                      <span style={{fontSize:9,color:"#ef4444"}}>{n.prot}g P</span>
-                      <span style={{fontSize:9,color:"#f59e0b"}}>{n.carb}g C</span>
-                      <span style={{fontSize:9,color:"#3b82f6"}}>{n.fat}g F</span>
-                      <button onClick={()=>{deleteNutr(date);if(nutrDate===date){setKcalIn("");setProt("");setCarb("");setFat("");}}} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14,padding:"0 2px",lineHeight:1,flexShrink:0}}>🗑</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── TAB ATTIVITÀ ── */}
-        {tab==="attività"&&(
-          <div className="fade-up">
-            {/* Attività di oggi con delete */}
-            {todayActs.length>0&&(
-              <div style={{...S.card,marginBottom:12,borderLeft:`3px solid #10b981`}}>
-                <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 8px"}}>🏃 ATTIVITÀ DI OGGI — {today}</p>
-                {todayActs.map((a,i)=>(
-                  <div key={a.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:i<todayActs.length-1?`1px solid ${C.border}`:"none"}}>
-                    <span style={{fontSize:12,fontWeight:700,color:C.text}}>{a.type}</span>
-                    <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                      <span style={{fontSize:10,color:"#f97316"}}>{a.kcal>0?`${a.kcal} kcal`:""}</span>
-                      <span style={{fontSize:10,color:C.text3}}>{fmtDur(a.min)}</span>
-                      <button onClick={()=>deleteActivity(today,a.id)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:15,padding:"0 2px"}}>🗑</button>
-                    </div>
-                  </div>
-                ))}
-                <p style={{margin:"8px 0 0",fontSize:10,color:"#f97316",fontWeight:700}}>Totale kcal attività: {todayKcalOut} kcal</p>
-              </div>
-            )}
-
-            {/* Form aggiungi attività con selezione data */}
-            <div style={S.card}>
-              <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 12px"}}>AGGIUNGI ATTIVITÀ</p>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-                <div>
-                  <label style={S.lbl}>📅 Data</label>
-                  <input type="date" style={S.inp} value={actDate} max={today} onChange={e=>setActDate(e.target.value)}/>
-                </div>
-                <div>
-                  <label style={S.lbl}>Tipo attività</label>
-                  <select style={S.inp} value={actType} onChange={e=>setActType(e.target.value)}>
-                    {ACTIVITIES.map(a=><option key={a} value={a}>{a}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-                <div><label style={S.lbl}>🔥 Kcal bruciate</label><input type="number" inputMode="numeric" style={S.inp} placeholder="400" value={actKcal} onChange={e=>setActKcal(e.target.value)}/></div>
-                <div><label style={S.lbl}>⏱ Minuti</label><input type="number" inputMode="numeric" style={S.inp} placeholder="60" value={actMin} onChange={e=>setActMin(e.target.value)}/></div>
-              </div>
-              <button style={{...S.btn("red"),width:"100%",padding:12}} onClick={addActivity}>+ AGGIUNGI</button>
-            </div>
-
-            {/* Storico attività con delete */}
-            {Object.keys(actEntries).length>0&&(
-              <div style={S.card}>
-                <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 10px"}}>STORICO ATTIVITÀ</p>
-                {Object.entries(actEntries).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,14).map(([date,acts])=>(
-                  <div key={date} style={{padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
-                    <span style={{fontSize:9,color:C.text3,fontWeight:700,display:"block",marginBottom:4}}>{date}</span>
-                    {acts.map((a,i)=>(
-                      <div key={a.id||i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 0"}}>
-                        <span style={{fontSize:10,background:C.bg3,borderRadius:5,padding:"2px 7px",color:C.text2}}>{a.type} {a.kcal>0?`· ${a.kcal}kcal`:""} {fmtDur(a.min)}</span>
-                        <button onClick={()=>deleteActivity(date,a.id)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:13,padding:"0 2px"}}>🗑</button>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── TAB CALORIE BRUCIATE ── */}
-        {tab==="calorie"&&(
-          <div className="fade-up">
-            {/* Card surplus/deficit oggi */}
-            {todaySurplus!=null&&(
-              <div style={{...S.card,marginBottom:10,background:todaySurplus>0?"#10b98118":"#ef444418",borderLeft:`3px solid ${todaySurplus>0?"#10b981":"#ef4444"}`}}>
-                <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 6px"}}>BILANCIO CALORICO OGGI</p>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                  <div>
-                    <p style={{margin:0,fontSize:28,fontWeight:900,color:todaySurplus>0?"#10b981":"#ef4444",lineHeight:1}}>{todaySurplus>0?"+":""}{todaySurplus} kcal</p>
-                    <p style={{margin:"4px 0 0",fontSize:10,color:C.text3}}>{todaySurplus>0?"SURPLUS — Bulking":"DEFICIT — Cutting"}</p>
-                  </div>
-                  <div style={{textAlign:"right"}}>
-                    <p style={{margin:0,fontSize:10,color:C.text3}}>Introdotte: <span style={{color:"#f97316",fontWeight:700}}>{todayNutr?.kcal||"—"} kcal</span></p>
-                    <p style={{margin:"2px 0 0",fontSize:10,color:C.text3}}>Bruciate: <span style={{color:"#3b82f6",fontWeight:700}}>{todayTdee} kcal</span></p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Grafico surplus/deficit */}
-            <div style={{...S.card,marginBottom:10}}>
-              <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 10px"}}>SURPLUS / DEFICIT — ULTIMI 14 GIORNI</p>
-              <SurplusChart nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} C={C}/>
-            </div>
-
-            {/* Form calorie bruciate totali con selezione data */}
-            <div style={{...S.card,borderLeft:`3px solid #f97316`}}>
-              <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 8px"}}>🔥 CALORIE BRUCIATE (TOTALE GIORNATA)</p>
-              <p style={{fontSize:9,color:C.text3,margin:"0 0 10px"}}>Inserisci il totale kcal bruciate nell'arco della giornata intera (metabolismo basale + attività). Usato per calcolare surplus/deficit.</p>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-                <div>
-                  <label style={S.lbl}>📅 Data</label>
-                  <input type="date" style={S.inp} value={tdeeDate} max={today} onChange={e=>{setTdeeDate(e.target.value);setTdeeVal(tdeeEntries[e.target.value]||"");}}/>
-                </div>
-                <div>
-                  <label style={S.lbl}>Kcal bruciate totali</label>
-                  <input type="number" inputMode="numeric" style={S.inp} placeholder="es. 2500" value={tdeeVal} onChange={e=>setTdeeVal(e.target.value)}/>
-                </div>
-              </div>
-              <button style={{...S.btn("red"),width:"100%",padding:12}} onClick={saveTdee}>💾 SALVA</button>
-              {tdeeEntries[tdeeDate]&&(
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8,background:C.bg3,borderRadius:8,padding:"8px 10px"}}>
-                  <p style={{margin:0,fontSize:11,color:"#f97316",fontWeight:700}}>✓ {tdeeEntries[tdeeDate]} kcal — {tdeeDate}</p>
-                  <button onClick={()=>deleteTdee(tdeeDate)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14,padding:"0 4px"}}>🗑</button>
-                </div>
-              )}
-            </div>
-
-            {/* Storico calorie bruciate */}
-            {Object.keys(tdeeEntries).length>0&&(
-              <div style={{...S.card,marginTop:10}}>
-                <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 10px"}}>STORICO CALORIE BRUCIATE</p>
-                {Object.entries(tdeeEntries).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,14).map(([date,kcalOut])=>{
-                  const nutr=nutrEntries[date];
-                  const bal=nutr?(nutr.kcal-kcalOut):null;
-                  return(
-                    <div key={date} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${C.border}`}}>
-                      <span style={{fontSize:10,color:C.text3,flexShrink:0}}>{date}</span>
-                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                        <span style={{fontSize:11,fontWeight:700,color:"#3b82f6"}}>{kcalOut} kcal</span>
-                        {bal!=null&&<span style={{fontSize:10,fontWeight:700,color:bal>0?"#10b981":"#ef4444",background:bal>0?"#10b98118":"#ef444418",borderRadius:4,padding:"1px 5px"}}>{bal>0?"+":""}{bal}</span>}
-                        <button onClick={()=>deleteTdee(date)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14,padding:"0 2px",lineHeight:1}}>🗑</button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -4190,6 +4392,7 @@ function GymTracker(){
           nutrEntries={nutrEntries} setNutrEntries={(v)=>{setNutrEntries(v);db(NUTR_KEY,v);}}
           actEntries={actEntries} setActEntries={(v)=>{setActEntries(v);db(ACT_KEY,v);}}
           tdeeEntries={tdeeEntries} setTdeeEntries={(v)=>{setTdeeEntries(v);db(TDEE_KEY,v);}}
+          sessions={sessions}
         />
         <TabBar view="fisico" setView={setView} C={C}/>
       </div>
