@@ -2020,6 +2020,179 @@ function ProtStreak({nutrEntries,bwKg,C}){
   );
 }
 
+// ── BW GOAL CARD ──
+function BwGoalCard({bwEntries,lastBw,C,S}){
+  const [bwGoal,setBwGoalState]=useState(()=>db(BW_GOAL_KEY)||"");
+  const [editGoal,setEditGoal]=useState(false);
+  const [goalInput,setGoalInput]=useState(()=>db(BW_GOAL_KEY)||"");
+  const saveGoal=()=>{db(BW_GOAL_KEY,goalInput);setBwGoalState(goalInput);setEditGoal(false);};
+  const goalKg=parseFloat(bwGoal)||0;
+  const diffKg=lastBw&&goalKg?Math.round((goalKg-lastBw.w)*10)/10:null;
+  const goalOk=diffKg!==null&&Math.abs(diffKg)<0.5;
+  const projection=(()=>{
+    if(bwEntries.length<3||!bwGoal)return null;
+    const recent=bwEntries.slice(-10);
+    const n=recent.length;
+    const xs=recent.map((_,i)=>i),ys=recent.map(e=>e.w);
+    const sumX=xs.reduce((a,b)=>a+b,0),sumY=ys.reduce((a,b)=>a+b,0);
+    const sumXY=xs.reduce((t,x,i)=>t+x*ys[i],0),sumX2=xs.reduce((t,x)=>t+x*x,0);
+    const slope=(n*sumXY-sumX*sumY)/(n*sumX2-sumX*sumX)||0;
+    const intercept=(sumY-slope*sumX)/n;
+    const target=parseFloat(bwGoal);
+    const current=recent[recent.length-1].w;
+    const diff=target-current;
+    if(Math.abs(slope)<0.001)return{daysNeeded:null,weeklyRate:0,current,target,diff};
+    const daysNeeded=Math.round(diff/slope);
+    const weeklyRate=Math.round(slope*7*100)/100;
+    const eta=new Date();eta.setDate(eta.getDate()+daysNeeded);
+    return{daysNeeded,weeklyRate,current,target,diff,eta:daysNeeded>0&&daysNeeded<1000?eta.toLocaleDateString("it-IT",{month:"short",year:"numeric"}):null};
+  })();
+  if(!lastBw&&!bwGoal&&!editGoal)return null;
+  return(
+    <div style={{...S.card,borderLeft:`3px solid ${goalOk?"#10b981":"#3b82f6"}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <p style={{margin:0,fontSize:9,letterSpacing:2,color:"#3b82f6"}}>🎯 OBIETTIVO PESO</p>
+        <button onClick={()=>{setEditGoal(v=>!v);setGoalInput(bwGoal||"");}} style={{background:"none",border:"none",color:C.text3,cursor:"pointer",fontSize:12,padding:"0 4px"}}>✏</button>
+      </div>
+      {editGoal?(
+        <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+          <div style={{flex:1}}>
+            <label style={S.lbl}>Peso target (kg)</label>
+            <input type="number" inputMode="decimal" style={S.inp} placeholder="es. 72" value={goalInput} onChange={e=>setGoalInput(e.target.value)}/>
+          </div>
+          <button style={{...S.btn("red"),padding:"11px 14px",flexShrink:0}} onClick={saveGoal}>💾</button>
+          {bwGoal&&<button style={{...S.btn("ghost"),padding:"11px 10px",flexShrink:0}} onClick={()=>{db(BW_GOAL_KEY,"");setBwGoalState("");setEditGoal(false);}}>🗑</button>}
+        </div>
+      ):(
+        <>
+          {bwGoal&&lastBw&&(
+            <div style={{marginBottom:projection&&projection.eta&&!goalOk?10:0}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                <span style={{fontSize:10,color:C.text3}}>{lastBw.w}kg ora</span>
+                <span style={{fontSize:10,fontWeight:700,color:"#3b82f6"}}>{goalKg}kg target</span>
+              </div>
+              <div style={{height:8,borderRadius:4,background:C.bg4,overflow:"hidden"}}>
+                <div style={{height:"100%",width:`${Math.min(lastBw.w/goalKg*100,100)}%`,background:goalOk?"#10b981":"#3b82f6",borderRadius:4,transition:"width 0.6s"}}/>
+              </div>
+              <p style={{margin:"4px 0 0",fontSize:9,color:goalOk?"#10b981":diffKg<0?"#ef4444":"#10b981"}}>
+                {goalOk?"🎉 Obiettivo raggiunto!":diffKg>0?`+${diffKg}kg da aggiungere`:`${diffKg}kg da perdere`}
+              </p>
+            </div>
+          )}
+          {projection&&projection.eta&&!goalOk&&(
+            <div style={{background:"#3b82f618",borderRadius:8,padding:"8px 12px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <p style={{margin:"0 0 2px",fontSize:8,color:"#3b82f6",letterSpacing:1}}>PROIEZIONE LINEARE</p>
+                  <p style={{margin:0,fontSize:11,color:C.text2}}>Arrivo stimato: <strong style={{color:"#3b82f6"}}>{projection.eta}</strong></p>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <p style={{margin:"0 0 1px",fontSize:8,color:C.text3}}>ritmo attuale</p>
+                  <p style={{margin:0,fontSize:12,fontWeight:700,color:projection.weeklyRate>0?"#10b981":"#ef4444"}}>{projection.weeklyRate>0?"+":""}{projection.weeklyRate}kg/sett</p>
+                </div>
+              </div>
+            </div>
+          )}
+          {!bwGoal&&<p style={{margin:0,fontSize:10,color:C.text3,cursor:"pointer"}} onClick={()=>setEditGoal(true)}>Tocca ✏ per impostare un obiettivo di peso</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── MONTHLY CALENDAR ──
+function MonthlyCalendar({sessions,actEntries,dayColorMap,C,S}){
+  const [calMonth,setCalMonth]=useState(()=>{const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;});
+  const [yr,mo]=calMonth.split("-").map(Number);
+  const firstDay=new Date(yr,mo-1,1);
+  const lastDay=new Date(yr,mo,0);
+  const startDow=(firstDay.getDay()||7)-1;
+  const totalDays=lastDay.getDate();
+  const cells=[];
+  for(let i=0;i<startDow;i++)cells.push(null);
+  for(let d=1;d<=totalDays;d++)cells.push(d);
+  const dayMap={};
+  sessions.forEach(s=>{if(s.date.startsWith(calMonth))dayMap[parseInt(s.date.slice(8))]=s.dayName;});
+  const actMap={};
+  Object.entries(actEntries||{}).forEach(([date,acts])=>{if(date.startsWith(calMonth))actMap[parseInt(date.slice(8))]=acts;});
+  const prevMonth=()=>{const d=new Date(yr,mo-2,1);setCalMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);};
+  const nextMonth=()=>{const d=new Date(yr,mo,1);if(d<=new Date())setCalMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);};
+  const monthNames=["","Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
+  return(
+    <div style={S.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <p style={{margin:0,fontSize:9,letterSpacing:2,color:C.text3}}>📅 CALENDARIO MENSILE</p>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <button onClick={prevMonth} style={{background:"none",border:"none",color:C.text2,fontSize:18,cursor:"pointer",padding:"0 4px",lineHeight:1}}>‹</button>
+          <span style={{fontSize:11,fontWeight:700,color:C.text}}>{monthNames[mo]} {yr}</span>
+          <button onClick={nextMonth} style={{background:"none",border:"none",color:new Date(yr,mo,1)>new Date()?C.text4:C.text2,fontSize:18,cursor:"pointer",padding:"0 4px",lineHeight:1}}>›</button>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:3}}>
+        {["L","M","M","G","V","S","D"].map((d,i)=><div key={i} style={{textAlign:"center",fontSize:8,color:C.text4,padding:"2px 0"}}>{d}</div>)}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
+        {cells.map((d,i)=>{
+          if(!d)return<div key={i}/>;
+          const hasGym=!!dayMap[d];const hasAct=!!actMap[d];
+          const isToday=`${yr}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`===todayISO();
+          const gymCol=dayMap[d]?(dayColorMap[dayMap[d]]||"#ef4444"):null;
+          return(
+            <div key={i} style={{aspectRatio:"1",borderRadius:6,background:hasGym?gymCol+"cc":hasAct?"#10b98166":C.bg3,border:isToday?"2px solid #ef4444":`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:1}}>
+              <span style={{fontSize:10,fontWeight:isToday?900:400,color:hasGym?"#fff":hasAct?"#10b981":C.text3,lineHeight:1}}>{d}</span>
+              {hasAct&&!hasGym&&<span style={{fontSize:7,lineHeight:1}}>{ACT_ICONS[(actMap[d]||[])[0]?.type]||"🏅"}</span>}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{display:"flex",gap:12,marginTop:10,flexWrap:"wrap"}}>
+        {[...new Set(Object.values(dayMap))].map(name=>(
+          <div key={name} style={{display:"flex",alignItems:"center",gap:4}}>
+            <div style={{width:10,height:10,borderRadius:3,background:dayColorMap[name]||"#ef4444"}}/>
+            <span style={{fontSize:8,color:C.text3}}>{name}</span>
+          </div>
+        ))}
+        {Object.keys(actMap).length>0&&<div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:10,height:10,borderRadius:3,background:"#10b98166"}}/><span style={{fontSize:8,color:C.text3}}>Attività</span></div>}
+      </div>
+    </div>
+  );
+}
+
+// ── HISTORY LOG FILTER ──
+function HistoryLogFilter({sessions,weekGroups,program,actEntries,deleteSession,setEditingSession,C,S}){
+  const [histFilter,setHistFilter]=useState("");
+  const [histDay,setHistDay]=useState("tutti");
+  const dayNames=["tutti",...(program?.days||[]).map(d=>d.name)];
+  const filtered=weekGroups.map(([wk,wkS])=>{
+    const fSess=wkS.filter(s=>{
+      const dayOk=histDay==="tutti"||s.dayName===histDay;
+      const textOk=!histFilter||s.exercises.some(e=>e.name.toLowerCase().includes(histFilter.toLowerCase()))||s.dayName.toLowerCase().includes(histFilter.toLowerCase());
+      return dayOk&&textOk;
+    });
+    return[wk,fSess];
+  }).filter(([,wkS])=>wkS.length>0);
+  return(
+    <>
+      <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center"}}>
+        <input style={{...S.inp,flex:1,padding:"9px 12px",fontSize:13}} placeholder="Cerca esercizio..." value={histFilter} onChange={e=>setHistFilter(e.target.value)}/>
+        {histFilter&&<button onClick={()=>setHistFilter("")} style={{background:"none",border:"none",color:C.text3,fontSize:18,cursor:"pointer",padding:"0 4px",flexShrink:0}}>✕</button>}
+      </div>
+      {dayNames.length>2&&(
+        <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:10}}>
+          {dayNames.map(d=>(
+            <button key={d} onClick={()=>setHistDay(d)} style={{padding:"5px 10px",borderRadius:6,border:`1px solid ${histDay===d?"#ef4444":C.border2}`,background:histDay===d?"#ef444420":"transparent",color:histDay===d?"#ef4444":C.text3,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:histDay===d?700:400}}>
+              {d==="tutti"?"Tutti":d}
+            </button>
+          ))}
+        </div>
+      )}
+      {filtered.length===0&&<p style={{fontSize:10,color:C.text4,textAlign:"center",padding:"16px 0"}}>Nessuna sessione trovata</p>}
+      {filtered.map(([wk,wkS])=><WeekGroup key={wk} weekKey={wk} weekSessions={wkS} program={program} actEntries={actEntries} onDeleteSession={deleteSession} onEditSession={setEditingSession} C={C} S={S}/>)}
+    </>
+  );
+}
+
+
 function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,actEntries,setActEntries,tdeeEntries,setTdeeEntries,sessions}){
   const [height,setHeight]=useState(()=>db("il_height")||"");
   const [tab,setTab]=useState("giorno");
@@ -2345,89 +2518,7 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
               </div>
             )}
             {/* Obiettivo peso con proiezione */}
-            {(()=>{
-              const [bwGoal,setBwGoalState]=useState(()=>db(BW_GOAL_KEY)||"");
-              const [editGoal,setEditGoal]=useState(false);
-              const [goalInput,setGoalInput]=useState(bwGoal||"");
-              const saveGoal=()=>{db(BW_GOAL_KEY,goalInput);setBwGoalState(goalInput);setEditGoal(false);};
-              if(!lastBw&&!bwGoal&&!editGoal)return null;
-              // calcola proiezione lineare dal trend recente
-              const projection=(()=>{
-                if(bwEntries.length<3||!bwGoal)return null;
-                const recent=bwEntries.slice(-10);
-                const n=recent.length;
-                const xs=recent.map((_,i)=>i),ys=recent.map(e=>e.w);
-                const sumX=xs.reduce((a,b)=>a+b,0),sumY=ys.reduce((a,b)=>a+b,0);
-                const sumXY=xs.reduce((t,x,i)=>t+x*ys[i],0),sumX2=xs.reduce((t,x)=>t+x*x,0);
-                const slope=(n*sumXY-sumX*sumY)/(n*sumX2-sumX*sumX)||0;
-                const intercept=(sumY-slope*sumX)/n;
-                const target=parseFloat(bwGoal);
-                const current=recent[recent.length-1].w;
-                const diff=target-current;
-                if(Math.abs(slope)<0.001)return{daysNeeded:null,weeklyRate:0,current,target,diff};
-                const daysNeeded=Math.round(diff/slope);
-                const weeklyRate=Math.round(slope*7*100)/100;
-                const eta=new Date();eta.setDate(eta.getDate()+daysNeeded);
-                return{daysNeeded,weeklyRate,current,target,diff,eta:daysNeeded>0&&daysNeeded<1000?eta.toLocaleDateString("it-IT",{month:"short",year:"numeric"}):null};
-              })();
-              const goalKg=parseFloat(bwGoal)||0;
-              const diffKg=lastBw&&goalKg?Math.round((goalKg-lastBw.w)*10)/10:null;
-              const goalOk=diffKg!==null&&Math.abs(diffKg)<0.5;
-              return(
-                <div style={{...S.card,borderLeft:`3px solid ${goalOk?"#10b981":"#3b82f6"}`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                    <p style={{margin:0,fontSize:9,letterSpacing:2,color:"#3b82f6"}}>🎯 OBIETTIVO PESO</p>
-                    <button onClick={()=>{setEditGoal(v=>!v);setGoalInput(bwGoal||"");}} style={{background:"none",border:"none",color:C.text3,cursor:"pointer",fontSize:12,padding:"0 4px"}}>✏</button>
-                  </div>
-                  {editGoal?(
-                    <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
-                      <div style={{flex:1}}>
-                        <label style={S.lbl}>Peso target (kg)</label>
-                        <input type="number" inputMode="decimal" style={S.inp} placeholder="es. 72" value={goalInput} onChange={e=>setGoalInput(e.target.value)}/>
-                      </div>
-                      <button style={{...S.btn("red"),padding:"11px 14px",flexShrink:0}} onClick={saveGoal}>💾</button>
-                      {bwGoal&&<button style={{...S.btn("ghost"),padding:"11px 10px",flexShrink:0}} onClick={()=>{db(BW_GOAL_KEY,"");setBwGoalState("");setEditGoal(false);}}>🗑</button>}
-                    </div>
-                  ):(
-                    <>
-                      {bwGoal&&lastBw&&(
-                        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:projection?10:0}}>
-                          <div style={{flex:1}}>
-                            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                              <span style={{fontSize:10,color:C.text3}}>{lastBw.w}kg ora</span>
-                              <span style={{fontSize:10,fontWeight:700,color:"#3b82f6"}}>{goalKg}kg target</span>
-                            </div>
-                            <div style={{height:8,borderRadius:4,background:C.bg4,overflow:"hidden"}}>
-                              <div style={{height:"100%",width:`${Math.min(lastBw.w/goalKg*100,100)}%`,background:goalOk?"#10b981":"#3b82f6",borderRadius:4,transition:"width 0.6s"}}/>
-                            </div>
-                            <p style={{margin:"4px 0 0",fontSize:9,color:goalOk?"#10b981":diffKg<0?"#ef4444":"#10b981"}}>
-                              {goalOk?"🎉 Obiettivo raggiunto!":diffKg>0?`+${diffKg}kg da aggiungere`:`${diffKg}kg da perdere`}
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                      {projection&&projection.eta&&!goalOk&&(
-                        <div style={{background:"#3b82f618",borderRadius:8,padding:"8px 12px"}}>
-                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                            <div>
-                              <p style={{margin:"0 0 2px",fontSize:8,color:"#3b82f6",letterSpacing:1}}>PROIEZIONE LINEARE</p>
-                              <p style={{margin:0,fontSize:11,color:C.text2}}>Arrivo stimato: <strong style={{color:"#3b82f6"}}>{projection.eta}</strong></p>
-                            </div>
-                            <div style={{textAlign:"right"}}>
-                              <p style={{margin:"0 0 1px",fontSize:8,color:C.text3}}>ritmo attuale</p>
-                              <p style={{margin:0,fontSize:12,fontWeight:700,color:projection.weeklyRate>0?"#10b981":"#ef4444"}}>{projection.weeklyRate>0?"+":""}{projection.weeklyRate}kg/sett</p>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                      {!bwGoal&&(
-                        <p style={{margin:0,fontSize:10,color:C.text3,cursor:"pointer"}} onClick={()=>setEditGoal(true)}>Tocca ✏ per impostare un obiettivo di peso</p>
-                      )}
-                    </>
-                  )}
-                </div>
-              );
-            })()}
+            <BwGoalCard bwEntries={bwEntries} lastBw={lastBw} C={C} S={S}/>
             <div style={S.card}>
               <p style={{fontSize:9,letterSpacing:2,color:C.text3,margin:"0 0 12px"}}>INSERISCI MISURE</p>
               <label style={S.lbl}>Altezza (cm) — una volta sola</label>
@@ -4444,75 +4535,7 @@ function GymTracker(){
               {sessions.length>=3&&<div style={S.card}><MuscleChart sessions={sessions} C={C}/></div>}
               {sessions.length>=4&&<div style={S.card}><RadarChart sessions={sessions} C={C}/></div>}
               {sessions.length>=7&&<div style={S.card}><HeatmapChart sessions={sessions} actEntries={actEntries} C={C}/></div>}
-              {sessions.length>=4&&(()=>{
-                // Calendario mensile tipo GitHub contribution graph
-                const [calMonth,setCalMonth]=React.useState(()=>{const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;});
-                const [yr,mo]=calMonth.split("-").map(Number);
-                const firstDay=new Date(yr,mo-1,1);
-                const lastDay=new Date(yr,mo,0);
-                const startDow=(firstDay.getDay()||7)-1; // 0=Lun
-                const totalDays=lastDay.getDate();
-                const cells=[];
-                for(let i=0;i<startDow;i++)cells.push(null);
-                for(let d=1;d<=totalDays;d++)cells.push(d);
-                const dayMap={};
-                sessions.forEach(s=>{if(s.date.startsWith(calMonth))dayMap[parseInt(s.date.slice(8))]=s.dayName;});
-                const actMap={};
-                Object.entries(actEntries||{}).forEach(([date,acts])=>{if(date.startsWith(calMonth))actMap[parseInt(date.slice(8))]=acts;});
-                const prevMonth=()=>{const d=new Date(yr,mo-2,1);setCalMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);};
-                const nextMonth=()=>{const d=new Date(yr,mo,1);const now=new Date();if(d<=now)setCalMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);};
-                const monthNames=["","Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
-                return(
-                  <div style={S.card}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                      <p style={{margin:0,fontSize:9,letterSpacing:2,color:C.text3}}>📅 CALENDARIO MENSILE</p>
-                      <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        <button onClick={prevMonth} style={{background:"none",border:"none",color:C.text2,fontSize:18,cursor:"pointer",padding:"0 4px",lineHeight:1}}>‹</button>
-                        <span style={{fontSize:11,fontWeight:700,color:C.text}}>{monthNames[mo]} {yr}</span>
-                        <button onClick={nextMonth} style={{background:"none",border:"none",color:new Date(yr,mo,1)>new Date()?C.text4:C.text2,fontSize:18,cursor:"pointer",padding:"0 4px",lineHeight:1}}>›</button>
-                      </div>
-                    </div>
-                    {/* Intestazioni giorni */}
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:3}}>
-                      {["L","M","M","G","V","S","D"].map((d,i)=>(
-                        <div key={i} style={{textAlign:"center",fontSize:8,color:C.text4,padding:"2px 0"}}>{d}</div>
-                      ))}
-                    </div>
-                    {/* Celle giorni */}
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
-                      {cells.map((d,i)=>{
-                        if(!d)return<div key={i}/>;
-                        const hasGym=!!dayMap[d];
-                        const hasAct=!!actMap[d];
-                        const isToday=`${yr}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`===todayISO();
-                        const gymCol=dayMap[d]?(dayColorMap[dayMap[d]]||"#ef4444"):null;
-                        return(
-                          <div key={i} style={{
-                            aspectRatio:"1",borderRadius:6,
-                            background:hasGym?gymCol+"cc":hasAct?"#10b98166":C.bg3,
-                            border:isToday?"2px solid #ef4444":`1px solid ${C.border}`,
-                            display:"flex",alignItems:"center",justifyContent:"center",
-                            position:"relative",flexDirection:"column",gap:1
-                          }}>
-                            <span style={{fontSize:10,fontWeight:isToday?900:400,color:hasGym?"#fff":hasAct?"#10b981":C.text3,lineHeight:1}}>{d}</span>
-                            {hasAct&&!hasGym&&<span style={{fontSize:7,lineHeight:1}}>{ACT_ICONS[(actMap[d]||[])[0]?.type]||"🏅"}</span>}
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {/* Legenda */}
-                    <div style={{display:"flex",gap:12,marginTop:10,flexWrap:"wrap"}}>
-                      {[...new Set(Object.values(dayMap))].map(name=>(
-                        <div key={name} style={{display:"flex",alignItems:"center",gap:4}}>
-                          <div style={{width:10,height:10,borderRadius:3,background:dayColorMap[name]||"#ef4444"}}/>
-                          <span style={{fontSize:8,color:C.text3}}>{name}</span>
-                        </div>
-                      ))}
-                      {Object.keys(actMap).length>0&&<div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:10,height:10,borderRadius:3,background:"#10b98166"}}/><span style={{fontSize:8,color:C.text3}}>Attività</span></div>}
-                    </div>
-                  </div>
-                );
-              })()}
+              {sessions.length>=4&&<MonthlyCalendar sessions={sessions} actEntries={actEntries} dayColorMap={dayColorMap} C={C} S={S}/>}
             </div>
           )}
 
@@ -4556,38 +4579,7 @@ function GymTracker(){
                   <button style={{...S.btn("red"),padding:"10px 24px",fontSize:11}} onClick={()=>setView("workout")}>→ VAI A WORKOUT</button>
                 </div>
               )}
-              {sessions.length>0&&(()=>{
-                const [histFilter,setHistFilter]=React.useState("");
-                const [histDay,setHistDay]=React.useState("tutti");
-                const dayNames=["tutti",...(program?.days||[]).map(d=>d.name)];
-                const filtered=weekGroups.map(([wk,wkS])=>{
-                  const fSess=wkS.filter(s=>{
-                    const dayOk=histDay==="tutti"||s.dayName===histDay;
-                    const textOk=!histFilter||s.exercises.some(e=>e.name.toLowerCase().includes(histFilter.toLowerCase()))||s.dayName.toLowerCase().includes(histFilter.toLowerCase());
-                    return dayOk&&textOk;
-                  });
-                  return[wk,fSess];
-                }).filter(([,wkS])=>wkS.length>0);
-                return(
-                  <>
-                    <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center"}}>
-                      <input style={{...S.inp,flex:1,padding:"9px 12px",fontSize:13}} placeholder="Cerca esercizio..." value={histFilter} onChange={e=>setHistFilter(e.target.value)}/>
-                      {histFilter&&<button onClick={()=>setHistFilter("")} style={{background:"none",border:"none",color:C.text3,fontSize:18,cursor:"pointer",padding:"0 4px",flexShrink:0}}>✕</button>}
-                    </div>
-                    {dayNames.length>2&&(
-                      <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:10}}>
-                        {dayNames.map(d=>(
-                          <button key={d} onClick={()=>setHistDay(d)} style={{padding:"5px 10px",borderRadius:6,border:`1px solid ${histDay===d?"#ef4444":C.border2}`,background:histDay===d?"#ef444420":"transparent",color:histDay===d?"#ef4444":C.text3,fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:histDay===d?700:400}}>
-                            {d==="tutti"?"Tutti":d}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {filtered.length===0&&<p style={{fontSize:10,color:C.text4,textAlign:"center",padding:"16px 0"}}>Nessuna sessione trovata</p>}
-                    {filtered.map(([wk,wkS])=><WeekGroup key={wk} weekKey={wk} weekSessions={wkS} program={program} actEntries={actEntries} onDeleteSession={deleteSession} onEditSession={setEditingSession} C={C} S={S}/>)}
-                  </>
-                );
-              })()}
+              {sessions.length>0&&<HistoryLogFilter sessions={sessions} weekGroups={weekGroups} program={program} actEntries={actEntries} deleteSession={deleteSession} setEditingSession={setEditingSession} C={C} S={S}/>}
             </div>
           )}
         </div>
