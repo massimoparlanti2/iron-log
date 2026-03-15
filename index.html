@@ -77,7 +77,7 @@ const DEFAULT_EX={
 const QUOTES=["Il dolore di oggi è la forza di domani.","Non fermarti quando sei stanco. Fermati quando hai finito.","Ogni rep ti avvicina alla versione migliore di te.","La disciplina batte la motivazione ogni giorno.","Il corpo raggiunge ciò che la mente crede.","Progressi lenti sono sempre meglio di nessun progresso.","La fatica di oggi è il trofeo di domani.","Non si tratta di essere il migliore. Si tratta di essere migliore di ieri."];
 
 const PROG_KEY="il_v10_prog", SESS_KEY="il_v10_sess", THEME_KEY="il_theme";
-const BW_KEY="il_bw", GOALS_KEY="il_goals", NUTR_KEY="il_nutr", ACT_KEY="il_act", TDEE_KEY="il_tdee", BW_GOAL_KEY="il_bw_goal";
+const BW_KEY="il_bw", GOALS_KEY="il_goals", NUTR_KEY="il_nutr", ACT_KEY="il_act", TDEE_KEY="il_tdee", BW_GOAL_KEY="il_bw_goal", CHECKIN_KEY="il_checkin";
 
 // ══════════════════════════════════════════════
 // ── GAMIFICATION SYSTEM ──
@@ -290,6 +290,106 @@ function getDeloadSuggestion(sessions){
 }
 
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// ── SCORE SYSTEM ──
+// ══════════════════════════════════════════════
+function calcWorkoutScore(session, sessions){
+  if(!session||!session.exercises?.length) return null;
+  let score=0;
+  // 1. Completamento (30pt) — quanti esercizi hanno peso > 0
+  const logged=session.exercises.filter(e=>e.weight>0).length;
+  const completionScore=Math.round(logged/session.exercises.length*30);
+  score+=completionScore;
+  // 2. Difficoltà media (25pt) — score 3 = ottimale, 1-2 = troppo facile, 4-5 = troppo pesante
+  const scored=session.exercises.filter(e=>e.score>0);
+  if(scored.length){
+    const avgScore=scored.reduce((t,e)=>t+e.score,0)/scored.length;
+    // picco a score 3 (Perfetto)
+    const diffScore=Math.round(Math.max(0, 25 - Math.abs(avgScore-3)*8));
+    score+=diffScore;
+  }
+  // 3. Volume vs media storica (25pt)
+  const vol=sessionVol(session);
+  const prevSameDay=sessions.filter(s=>s.dayName===session.dayName&&s.id!==session.id);
+  if(prevSameDay.length>=2){
+    const avgVol=prevSameDay.reduce((t,s)=>t+sessionVol(s),0)/prevSameDay.length;
+    const volRatio=avgVol>0?vol/avgVol:1;
+    const volScore=Math.round(Math.min(25, volRatio*20));
+    score+=volScore;
+  } else score+=15; // bonus default se non ci sono abbastanza sessioni
+  // 4. Durata ragionevole (20pt) — picco 45-75min
+  const dur=session.duration||0;
+  const durScore=dur===0?5:dur<30?10:dur<=75?20:dur<=90?15:10;
+  score+=durScore;
+  return Math.min(100,score);
+}
+
+function calcNutrScore(date, nutrEntries, tdeeEntries, bwKg, actEntries, sessions){
+  const n=nutrEntries[date];
+  if(!n||!n.kcal) return null;
+  let score=0;
+  // 1. Target proteico (35pt)
+  const protTarget=bwKg?Math.round(bwKg*1.8):140;
+  const protRatio=n.prot/protTarget;
+  const protScore=Math.round(Math.min(35, protRatio*35));
+  score+=protScore;
+  // 2. Kcal nel range TDEE (30pt)
+  const acts=actEntries?.[date]||[];
+  const gymKcal=(sessions||[]).filter(s=>s.date===date).reduce((t,s)=>t+(s.kcal||0),0);
+  const actKcal=acts.reduce((t,a)=>t+(a.kcal||0),0);
+  const tdeeManual=tdeeEntries?.[date]||null;
+  const tdee=tdeeManual||(gymKcal+actKcal)||null;
+  if(tdee){
+    const ratio=n.kcal/tdee;
+    // range ottimale 0.85-1.15
+    const kcalScore=ratio>=0.85&&ratio<=1.15?30:ratio>=0.7&&ratio<=1.3?20:ratio>=0.6&&ratio<=1.4?10:5;
+    score+=kcalScore;
+  } else score+=15;
+  // 3. Qualità macro (20pt) — target P:30%, C:45%, F:25%
+  const totalMacroCal=(n.prot||0)*4+(n.carb||0)*4+(n.fat||0)*9;
+  if(totalMacroCal>0){
+    const pPct=(n.prot*4)/totalMacroCal;
+    const cPct=(n.carb*4)/totalMacroCal;
+    const fPct=(n.fat*9)/totalMacroCal;
+    const macroErr=Math.abs(pPct-0.30)+Math.abs(cPct-0.45)+Math.abs(fPct-0.25);
+    const macroScore=Math.round(Math.max(0,20-macroErr*40));
+    score+=macroScore;
+  } else score+=10;
+  // 4. Consistenza (15pt) — quanti giorni registrati nell'ultima settimana
+  const last7=Array.from({length:7},(_,i)=>{const d=new Date(date);d.setDate(d.getDate()-i);return d.toISOString().slice(0,10);});
+  const loggedDays=last7.filter(d=>nutrEntries[d]?.kcal>0).length;
+  score+=Math.round(loggedDays/7*15);
+  return Math.min(100,score);
+}
+
+function calcDayScore(date, nutrEntries, tdeeEntries, bwKg, actEntries, sessions){
+  const workoutSess=sessions.filter(s=>s.date===date);
+  const wScore=workoutSess.length?calcWorkoutScore(workoutSess[workoutSess.length-1],sessions):null;
+  const nScore=calcNutrScore(date,nutrEntries,tdeeEntries,bwKg,actEntries,sessions);
+  const acts=actEntries?.[date]||[];
+  const actBonus=acts.length>0?5:0;
+  if(wScore===null&&nScore===null) return null;
+  if(wScore===null) return Math.min(100,nScore+actBonus);
+  if(nScore===null) return Math.min(100,wScore+actBonus);
+  return Math.min(100,Math.round(wScore*0.55+nScore*0.45)+actBonus);
+}
+
+function scoreColor(s){
+  if(s===null)return"#6b7280";
+  if(s>=80)return"#10b981";
+  if(s>=60)return"#f59e0b";
+  if(s>=40)return"#f97316";
+  return"#ef4444";
+}
+function scoreLabel(s){
+  if(s===null)return"—";
+  if(s>=85)return"Eccellente";
+  if(s>=70)return"Ottimo";
+  if(s>=55)return"Buono";
+  if(s>=40)return"Discreto";
+  return"Da migliorare";
+}
+
 // ── STRENGTH SCIENCE ──
 // ══════════════════════════════════════════════
 
@@ -1192,6 +1292,65 @@ function PRHallOfFame({sessions,program,C,S}){
 }
 
 // ── TODAY SNAPSHOT (Home) ──
+// ── DAY SCORE CARD ──
+function DayScoreCard({date,sessions,nutrEntries,tdeeEntries,bwEntries,actEntries,C,S}){
+  const bwKg=bwEntries.length?bwEntries[bwEntries.length-1].w:null;
+  const daySess=sessions.filter(s=>s.date===date);
+  const lastSess=daySess.length?daySess[daySess.length-1]:null;
+  const wScore=lastSess?calcWorkoutScore(lastSess,sessions):null;
+  const nScore=calcNutrScore(date,nutrEntries,tdeeEntries,bwKg,actEntries,sessions);
+  const dScore=calcDayScore(date,nutrEntries,tdeeEntries,bwKg,actEntries,sessions);
+  if(dScore===null) return null;
+  const items=[
+    {label:"GIORNATA",score:dScore,show:true},
+    {label:"ALLENAMENTO",score:wScore,show:wScore!==null},
+    {label:"NUTRIZIONE",score:nScore,show:nScore!==null},
+  ].filter(x=>x.show);
+  return(
+    <div style={{...S.card,marginBottom:10}}>
+      <p style={{margin:"0 0 10px",fontSize:8,letterSpacing:2,color:C.text3}}>📊 SCORE GIORNATA — {date}</p>
+      <div style={{display:"grid",gridTemplateColumns:`repeat(${items.length},1fr)`,gap:8}}>
+        {items.map(({label,score})=>{
+          const col=scoreColor(score);
+          const r=26,circ=2*Math.PI*r;
+          return(
+            <div key={label} style={{textAlign:"center"}}>
+              <div style={{position:"relative",width:64,height:64,margin:"0 auto 6px"}}>
+                <svg width={64} height={64} style={{transform:"rotate(-90deg)"}}>
+                  <circle cx={32} cy={32} r={r} fill="none" stroke={C.bg4} strokeWidth={5}/>
+                  <circle cx={32} cy={32} r={r} fill="none" stroke={col} strokeWidth={5}
+                    strokeDasharray={circ} strokeDashoffset={circ*(1-(score||0)/100)}
+                    strokeLinecap="round" style={{transition:"stroke-dashoffset 0.8s ease"}}/>
+                </svg>
+                <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <span style={{fontSize:15,fontWeight:900,color:col}}>{score}</span>
+                </div>
+              </div>
+              <p style={{margin:"0 0 1px",fontSize:7,letterSpacing:1,color:C.text3}}>{label}</p>
+              <p style={{margin:0,fontSize:9,fontWeight:700,color:col}}>{scoreLabel(score)}</p>
+            </div>
+          );
+        })}
+      </div>
+      {/* Check-in benessere se presente */}
+      {lastSess?.checkin&&(
+        <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`}}>
+          <p style={{margin:"0 0 6px",fontSize:8,letterSpacing:1,color:C.text3}}>BENESSERE PRE-ALLENAMENTO</p>
+          <div style={{display:"flex",gap:10}}>
+            {[["😴",lastSess.checkin.sonno,"Sonno"],["⚡",lastSess.checkin.energia,"Energia"],["🧠",lastSess.checkin.stress,"Stress"]].map(([icon,val,lbl])=>(
+              <div key={lbl} style={{flex:1,textAlign:"center",background:C.bg3,borderRadius:8,padding:"6px 4px"}}>
+                <p style={{margin:"0 0 2px",fontSize:12,lineHeight:1}}>{icon}</p>
+                <p style={{margin:"0 0 1px",fontSize:14,fontWeight:900,color:scoreColor(val*20)}}>{val}</p>
+                <p style={{margin:0,fontSize:7,color:C.text4}}>{lbl}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TodaySnapshot({sessions,nutrEntries,tdeeEntries,actEntries,program,C,S}){
   const today=todayISO();
   const kcalIn=nutrEntries[today]?.kcal||null;
@@ -1552,6 +1711,7 @@ function WeekGroup({weekKey,weekSessions,program,actEntries,onDeleteSession,onEd
               </div>
               <div style={{display:"flex",gap:8,alignItems:"flex-start",flexShrink:0}}>
                 <span style={{fontSize:10,color:"#ef4444",fontWeight:700}}>{sv>=1000?`${(sv/1000).toFixed(1)}t`:`${sv}kg`}</span>
+                {(()=>{const sc=calcWorkoutScore(s,weekSessions);if(!sc)return null;const col=scoreColor(sc);return<span style={{fontSize:10,fontWeight:700,color:col,background:col+"20",borderRadius:4,padding:"1px 5px"}}>{sc}</span>;})()}
                 {onEditSession&&<button onClick={()=>onEditSession(s)} style={{background:"none",border:"none",color:C.text3,cursor:"pointer",fontSize:15,padding:"0 2px",lineHeight:1}} title="Modifica">✏</button>}
                 {onDeleteSession&&<button onClick={()=>{if(window.confirm("Eliminare questo allenamento?"))onDeleteSession(s.id);}} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:16,padding:"0 2px",lineHeight:1}}>🗑</button>}
               </div>
@@ -4010,6 +4170,84 @@ function ThemePanel({themePrefs, setThemePrefs, C, S}){
   );
 }
 
+// ══════════════════════════════════════════════
+// ── CHECKIN SCREEN ──
+// ══════════════════════════════════════════════
+function CheckinScreen({C,S,dayName,onConfirm,onSkip}){
+  const [sonno,setSonno]=useState(null);
+  const [energia,setEnergia]=useState(null);
+  const [stress,setStress]=useState(null);
+  const allDone=sonno&&energia&&stress;
+  const items=[
+    {key:"sonno",label:"😴 Sonno",sub:"Com'hai dormito?",val:sonno,set:setSonno,lo:"Pessimo",hi:"Ottimo"},
+    {key:"energia",label:"⚡ Energia",sub:"Come ti senti fisicamente?",val:energia,set:setEnergia,lo:"Esausto",hi:"Carico"},
+    {key:"stress",label:"🧠 Stress",sub:"Livello di stress mentale?",val:stress,set:setStress,lo:"Molto stress",hi:"Rilassato"},
+  ];
+  const avgWellbeing=allDone?Math.round((sonno+energia+stress)/3*10)/10:null;
+  const wellColor=avgWellbeing?avgWellbeing>=4?"#10b981":avgWellbeing>=3?"#f59e0b":"#ef4444":"#6b7280";
+  const wellMsg=avgWellbeing?avgWellbeing>=4?"Ottima forma! Punta al massimo oggi.":avgWellbeing>=3?"Forma discreta. Allena con attenzione.":"Stai sotto. Considera di alleggerire i pesi.":" ";
+  return(
+    <div style={S.app}>
+      <div style={{...S.wrap,paddingTop:20}}>
+        <div style={{textAlign:"center",marginBottom:20}}>
+          <p style={{fontSize:26,margin:"0 0 6px",lineHeight:1}}>👋</p>
+          <h2 style={{...S.h2,border:"none",padding:0,textAlign:"center",marginBottom:4}}>Come stai oggi?</h2>
+          <p style={{fontSize:11,color:C.text3,margin:0}}>{dayName} · {todayISO()}</p>
+        </div>
+        {items.map(({key,label,sub,val,set,lo,hi})=>(
+          <div key={key} style={{...S.card,marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:4}}>
+              <p style={{margin:0,fontSize:13,fontWeight:700,color:C.text}}>{label}</p>
+              <p style={{margin:0,fontSize:9,color:C.text3}}>{sub}</p>
+            </div>
+            <div style={{display:"flex",gap:8,justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+              <span style={{fontSize:8,color:C.text4,flexShrink:0}}>{lo}</span>
+              <div style={{display:"flex",gap:6,flex:1,justifyContent:"center"}}>
+                {[1,2,3,4,5].map(v=>(
+                  <button key={v} onClick={()=>set(v)} style={{
+                    width:40,height:40,borderRadius:10,border:`2px solid ${val===v?scoreColor(v*20):C.border2}`,
+                    background:val===v?scoreColor(v*20)+"22":C.bg3,
+                    color:val===v?scoreColor(v*20):C.text3,
+                    fontSize:14,fontWeight:val===v?900:400,cursor:"pointer",
+                    fontFamily:"inherit",transition:"all 0.15s",flexShrink:0
+                  }}>{v}</button>
+                ))}
+              </div>
+              <span style={{fontSize:8,color:C.text4,flexShrink:0}}>{hi}</span>
+            </div>
+            {val&&<div style={{height:4,borderRadius:2,background:C.bg4,overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${val*20}%`,background:scoreColor(val*20),transition:"width 0.4s",borderRadius:2}}/>
+            </div>}
+          </div>
+        ))}
+        {allDone&&(
+          <div style={{...S.card,marginBottom:14,borderLeft:`3px solid ${wellColor}`,background:wellColor+"12"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:28,lineHeight:1}}>{avgWellbeing>=4?"💪":avgWellbeing>=3?"🙂":"😓"}</span>
+              <div>
+                <p style={{margin:"0 0 2px",fontSize:10,fontWeight:700,color:wellColor}}>BENESSERE: {avgWellbeing}/5</p>
+                <p style={{margin:0,fontSize:11,color:C.text2}}>{wellMsg}</p>
+              </div>
+            </div>
+          </div>
+        )}
+        <button
+          style={{...S.btn("red"),width:"100%",padding:16,fontSize:14,letterSpacing:2,marginBottom:8,
+            background:allDone?"linear-gradient(135deg,#ef4444,#dc2626)":"transparent",
+            border:allDone?"none":"1px solid #ef4444",
+            color:allDone?"#fff":"#ef4444",
+            boxShadow:allDone?"0 4px 20px #ef444450":"none"}}
+          onClick={()=>onConfirm({sonno,energia,stress,avg:avgWellbeing})}>
+          {allDone?"▶ INIZIA ALLENAMENTO":"▶ INIZIA SENZA VALUTAZIONE"}
+        </button>
+        <button style={{...S.btn("ghost"),width:"100%",padding:10,fontSize:11}} onClick={onSkip}>
+          Salta check-in
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Confetti(){
   const pieces=Array.from({length:28},(_,i)=>({
     id:i,
@@ -4059,13 +4297,18 @@ function FinishPage({C,S,workoutStart,program,activeDay,logData,sessionsRef,onDo
     const exercises=day.exercises.map(ex=>{
       const d=logData[ex.name]||{};
       return{name:ex.name,muscle:ex.muscle,sets:d.sets||ex.sets,weight:parseFloat(d.weight)||0,reps:parseInt(d.reps)||ex.minReps,score:d.score||3,note:d.note||""};
-    });    const sess={id:Date.now(),date:todayISO(),dayName:day.name,exercises,duration:parseInt(dur)||0,kcal:parseInt(kcal)||0,note};
+    });    const sess={id:Date.now(),date:todayISO(),dayName:day.name,exercises,duration:parseInt(dur)||0,kcal:parseInt(kcal)||0,note,checkin:checkinData||null};
     const updated=[...sessionsRef.current,sess];
     sessionsRef.current=updated;db(SESS_KEY,updated);setSaved(true);setTimeout(()=>onDone(updated,exercises),400);
   };
   const iD=parseInt(dur)||0,iK=parseInt(kcal)||0;
   const emoji=completionPct===100?"🏆":completionPct>=80?"💪":completionPct>=50?"⚡":"🔥";
   const msg=completionPct===100?"ALLENAMENTO COMPLETO!":completionPct>=80?"QUASI PERFETTO!":"OTTIMO LAVORO!";
+  // Calcola score preview (sessione non ancora salvata)
+  const previewSess={dayName:day.name,exercises:day.exercises.map(ex=>{const d=logData[ex.name]||{};return{...ex,weight:parseFloat(d.weight)||0,reps:parseInt(d.reps)||ex.minReps,score:d.score||3};}),duration:iD,kcal:iK};
+  const wScore=calcWorkoutScore(previewSess,sessionsRef.current);
+  const wScoreCol=scoreColor(wScore);
+  const wScoreLabel=scoreLabel(wScore);
   return(
     <div style={S.app}>
       {showConfetti&&<Confetti/>}
@@ -4086,6 +4329,20 @@ function FinishPage({C,S,workoutStart,program,activeDay,logData,sessionsRef,onDo
             </svg>
             <span style={{fontSize:18,fontWeight:900,color:completionPct===100?"#f59e0b":"#ef4444",position:"relative"}}>{completionPct}%</span>
           </div>
+          {/* Score allenamento */}
+          {wScore!==null&&(
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:12,marginTop:4}}>
+              <div style={{textAlign:"center"}}>
+                <div style={{display:"inline-flex",alignItems:"center",gap:6,background:wScoreCol+"20",borderRadius:10,padding:"6px 16px",border:`1px solid ${wScoreCol}44`}}>
+                  <span style={{fontSize:22,fontWeight:900,color:wScoreCol,lineHeight:1}}>{wScore}</span>
+                  <div style={{textAlign:"left"}}>
+                    <p style={{margin:0,fontSize:8,color:wScoreCol,letterSpacing:1}}>SCORE</p>
+                    <p style={{margin:0,fontSize:10,fontWeight:700,color:wScoreCol}}>{wScoreLabel}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div style={{...S.card,borderLeft:`3px solid ${completionPct===100?"#f59e0b":"#ef4444"}`}}>
@@ -4152,6 +4409,7 @@ function GymTracker(){
   const [bwEntries,setBwEntries]=useState([]);
   const [calOffset,setCalOffset]=useState(0);
   const [editingSession,setEditingSession]=useState(null);
+  const [checkinData,setCheckinData]=useState(null);
   const sessionsRef=useRef([]);
 
   const updateSessions=(val)=>{sessionsRef.current=val;setSessions(val);};
@@ -4180,7 +4438,6 @@ function GymTracker(){
   const saveProgram=(p)=>{setProgram(p);db(PROG_KEY,p);notify("Programma salvato! 💪");setView("workout");};
   const startWorkout=(di)=>{
     setActiveDay(di);
-    // Pre-compila con i valori suggeriti per ogni esercizio
     const day=program.days[di];
     const prefilled={};
     day.exercises.forEach(ex=>{
@@ -4188,6 +4445,14 @@ function GymTracker(){
       if(sg){prefilled[ex.name]={weight:sg.nw,reps:sg.nr};}
     });
     setLogData(prefilled);
+    setView("checkin"); // va al check-in prima del log
+  };
+  const confirmCheckin=(data)=>{
+    setCheckinData(data);
+    // salva check-in
+    const existing=db(CHECKIN_KEY)||{};
+    existing[todayISO()]={...data,dayName:program.days[activeDay].name};
+    db(CHECKIN_KEY,existing);
     setWorkoutStart(Date.now());setView("log");
   };
   const setGoal=(name,kg)=>{const g={...goals,[name]:kg};setGoals(g);db(GOALS_KEY,g);};
@@ -4303,6 +4568,17 @@ function GymTracker(){
     </div>
   );
 
+  if(view==="checkin"&&activeDay!==null&&program){
+    return(
+      <div style={S.app}><Toast/>
+        <CheckinScreen C={C} S={S} dayName={program.days[activeDay].name}
+          onConfirm={confirmCheckin}
+          onSkip={()=>{setCheckinData(null);setWorkoutStart(Date.now());setView("log");}}
+        />
+      </div>
+    );
+  }
+
   if(view==="finish"){
     return(<><PRBanner/><FinishPage C={C} S={S} workoutStart={workoutStart} program={program} activeDay={activeDay} logData={logData} sessionsRef={sessionsRef} onDone={handleFinish}/><TabBar view="finish" setView={setView} C={C}/></>);
   }
@@ -4378,8 +4654,22 @@ function GymTracker(){
             })();
             const curW=parseFloat(cur.weight)||0;
             const weightDelta=lastEx&&curW>0?Math.round((curW-lastEx.weight)*10)/10:null;
+            // warm-up: solo al primo esercizio del gruppo muscolare nell'allenamento
+            const isFirstOfMuscle=i===day.exercises.findIndex(e=>e.muscle===ex.muscle);
+            const workWeight=parseFloat(cur.weight)||sg?.nw||lastEx?.weight||0;
+            const warmupWeight=workWeight>0?Math.round(workWeight*0.6/2.5)*2.5:null;
             return(
               <div key={i} style={{...S.card,borderLeft:`3px solid ${MUSCLE_COLORS[ex.muscle]||dayCol}`}}>
+                {/* Warm-up: solo al primo esercizio del gruppo muscolare */}
+                {isFirstOfMuscle&&warmupWeight>0&&(
+                  <div style={{background:"#f59e0b18",border:"1px solid #f59e0b30",borderRadius:7,padding:"6px 10px",marginBottom:10,display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:14,flexShrink:0}}>🔥</span>
+                    <div>
+                      <p style={{margin:"0 0 1px",fontSize:8,fontWeight:700,color:"#f59e0b",letterSpacing:1}}>RISCALDAMENTO {ex.muscle.toUpperCase()}</p>
+                      <p style={{margin:0,fontSize:10,color:C.text2}}>{warmupWeight}kg × 10–12 rip · 1 serie leggera</p>
+                    </div>
+                  </div>
+                )}
                 <div style={{display:"flex",justifyContent:"space-between",gap:8,marginBottom:10,alignItems:"flex-start"}}>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
@@ -4651,6 +4941,7 @@ function GymTracker(){
             )}
 
             <TodaySnapshot sessions={sessions} nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} actEntries={actEntries} program={program} C={C} S={S}/>
+            <DayScoreCard date={todayISO()} sessions={sessions} nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} bwEntries={bwEntries} actEntries={actEntries} C={C} S={S}/>
             <WeekSummary sessions={sessions} setSessions={(v)=>{updateSessions(v);db(SESS_KEY,v);}} nutrEntries={nutrEntries} setNutrEntries={(v)=>{setNutrEntries(v);db(NUTR_KEY,v);}} actEntries={actEntries} setActEntries={(v)=>{setActEntries(v);db(ACT_KEY,v);}} tdeeEntries={tdeeEntries} setTdeeEntries={(v)=>{setTdeeEntries(v);db(TDEE_KEY,v);}} program={program} C={C} S={S}/>
             {(()=>{const xp=calcXP(sessions,actEntries);const lv=getLevel(xp);const pct=getLevelProgress(xp);const unlockedCount=getUnlockedBadges(sessions,records,actEntries).length;return(
               <div style={{...S.card,marginTop:10,display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderLeft:`3px solid ${lv.color}`,background:`linear-gradient(135deg,${C.bg2},${C.bg3})`}}>
