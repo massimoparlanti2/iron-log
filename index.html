@@ -77,7 +77,7 @@ const DEFAULT_EX={
 const QUOTES=["Il dolore di oggi è la forza di domani.","Non fermarti quando sei stanco. Fermati quando hai finito.","Ogni rep ti avvicina alla versione migliore di te.","La disciplina batte la motivazione ogni giorno.","Il corpo raggiunge ciò che la mente crede.","Progressi lenti sono sempre meglio di nessun progresso.","La fatica di oggi è il trofeo di domani.","Non si tratta di essere il migliore. Si tratta di essere migliore di ieri."];
 
 const PROG_KEY="il_v10_prog", SESS_KEY="il_v10_sess", THEME_KEY="il_theme";
-const BW_KEY="il_bw", GOALS_KEY="il_goals", NUTR_KEY="il_nutr", ACT_KEY="il_act", TDEE_KEY="il_tdee", FOOD_KEY="il_food", FOOD_FAV_KEY="il_food_fav";
+const BW_KEY="il_bw", GOALS_KEY="il_goals", NUTR_KEY="il_nutr", ACT_KEY="il_act", TDEE_KEY="il_tdee";
 
 // ══════════════════════════════════════════════
 // ── GAMIFICATION SYSTEM ──
@@ -99,9 +99,9 @@ const BADGES=[
   {id:"sess10",       name:"Decathlete",     icon:"🔟", desc:"10 sessioni completate",            check:(_,s)=>s.length>=10},
   {id:"sess50",       name:"Iron Fifty",     icon:"50",desc:"50 sessioni completate",           check:(_,s)=>s.length>=50},
   {id:"sess100",      name:"Centurion",      icon:"💯", desc:"100 sessioni completate",           check:(_,s)=>s.length>=100},
-  {id:"streak4",      name:"Macchina",       icon:"⚙",  desc:"4 settimane di streak",             check:(_,s,a)=>getStreak(s,a)>=4},
-  {id:"streak8",      name:"Inarrestabile",  icon:"🚂", desc:"8 settimane di streak",             check:(_,s,a)=>getStreak(s,a)>=8},
-  {id:"streak12",     name:"Leggenda Viva",  icon:"🌋", desc:"12 settimane di streak",            check:(_,s,a)=>getStreak(s,a)>=12},
+  {id:"streak4",      name:"Macchina",       icon:"⚙",  desc:"4 settimane di streak",             check:(_,s)=>getStreak(s)>=4},
+  {id:"streak8",      name:"Inarrestabile",  icon:"🚂", desc:"8 settimane di streak",             check:(_,s)=>getStreak(s)>=8},
+  {id:"streak12",     name:"Leggenda Viva",  icon:"🌋", desc:"12 settimane di streak",            check:(_,s)=>getStreak(s)>=12},
   {id:"pr5",          name:"Record Breaker", icon:"🏆", desc:"5 personal record diversi",         check:(r)=>Object.keys(r).length>=5},
   {id:"pr20",         name:"PR Hunter",      icon:"🎯", desc:"20 personal record diversi",        check:(r)=>Object.keys(r).length>=20},
   {id:"volume100k",   name:"Tonnellata",     icon:"🏋", desc:"100.000 kg di volume totale",       check:(_,s)=>s.reduce((t,x)=>t+sessionVol(x),0)>=100000},
@@ -679,16 +679,7 @@ function getDietQualityScore(nutrEntries, tdeeEntries, sessions, bwKg) {
   return {score:Math.min(score,100), grade, gradeColor, breakdown};
 }
 
-function db(k,v){
-  if(v===undefined){try{const x=localStorage.getItem(k);return x?JSON.parse(x):null;}catch(_){return null;}}
-  try{localStorage.setItem(k,JSON.stringify(v));}
-  catch(e){
-    if(e.name==='QuotaExceededError'||e.code===22){
-      // try to notify user once
-      if(!window._quotaWarnShown){window._quotaWarnShown=true;setTimeout(()=>alert('⚠️ Iron Log: spazio di archiviazione quasi esaurito!\n\nEsporta un backup JSON e poi elimina i dati vecchi dallo storico per liberare spazio.'),100);}
-    }
-  }
-}
+function db(k,v){if(v===undefined){try{const x=localStorage.getItem(k);return x?JSON.parse(x):null;}catch(_){return null;}}try{localStorage.setItem(k,JSON.stringify(v));}catch(_){}}
 function todayISO(){return new Date().toISOString().slice(0,10);}
 function fmtDur(m){if(!m)return"—";const h=Math.floor(m/60),r=m%60;return h?`${h}h ${r}m`:`${m}min`;}
 function sessionVol(s){return s.exercises.reduce((t,e)=>t+(e.sets||1)*e.reps*e.weight,0);}
@@ -702,15 +693,10 @@ function getRecords(sessions){
   }));
   return r;
 }
-function getStreak(sessions, actEntries){
+function getStreak(sessions){
+  if(!sessions.length)return 0;
   const toWeek=d=>{const dt=new Date(d),day=dt.getDay()||7;dt.setDate(dt.getDate()+1-day);return dt.toISOString().slice(0,10);};
-  // collect all active dates: gym sessions + activity days
-  const activeDates=[
-    ...sessions.map(s=>s.date),
-    ...Object.keys(actEntries||{})
-  ];
-  if(!activeDates.length)return 0;
-  const weeks=[...new Set(activeDates.sort().reverse().map(toWeek))];
+  const weeks=[...new Set([...sessions].map(s=>s.date).sort().reverse().map(toWeek))];
   let s=1;for(let i=0;i<weeks.length-1;i++){if((new Date(weeks[i])-new Date(weeks[i+1]))/604800000<=1)s++;else break;}return s;
 }
 function getWeekDays(offset=0){
@@ -1856,308 +1842,6 @@ function SurplusChart({nutrEntries,tdeeEntries,C}){
 // ══════════════════════════════════════════════
 
 // ── Daily Calorie Ring ──
-// ══════════════════════════════════════════════
-// ── FOOD TRACKER (Open Food Facts) ──
-// ══════════════════════════════════════════════
-const MEAL_SLOTS=["Colazione","Pranzo","Cena","Spuntino"];
-const MEAL_ICONS={"Colazione":"☀️","Pranzo":"🌤","Cena":"🌙","Spuntino":"🍎"};
-
-function FoodTracker({foodLog,setFoodLog,foodFavs,setFoodFavs,selDate,bwKg,C,S}){
-  const [query,setQuery]=useState("");
-  const [results,setResults]=useState([]);
-  const [loading,setLoading]=useState(false);
-  const [selFood,setSelFood]=useState(null);
-  const [grams,setGrams]=useState("100");
-  const [meal,setMeal]=useState("Pranzo");
-  const [searchErr,setSearchErr]=useState(null);
-  const [showFavs,setShowFavs]=useState(false);
-  const debounceRef=useRef(null);
-
-  // foodLog structure: {[date]: [{id,name,kcal,prot,carb,fat,grams,meal,ts}]}
-  const dayLog=foodLog[selDate]||[];
-  const totals=dayLog.reduce((t,e)=>({
-    kcal:t.kcal+(e.kcal||0),prot:t.prot+(e.prot||0),
-    carb:t.carb+(e.carb||0),fat:t.fat+(e.fat||0)
-  }),{kcal:0,prot:0,carb:0,fat:0});
-  const protTarget=bwKg?Math.round(bwKg*1.8):140;
-  const kcalTarget=bwKg?Math.round(bwKg*30):2000; // rough maintain
-
-  const searchFood=async(q)=>{
-    if(!q||q.length<2){setResults([]);return;}
-    setLoading(true);setSearchErr(null);
-    try{
-      const url=`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=8&lc=it&fields=product_name,nutriments,brands,serving_size,image_small_url`;
-      const res=await fetch(url);
-      const data=await res.json();
-      const valid=(data.products||[]).filter(p=>{
-        const n=p.nutriments;
-        return p.product_name&&n&&(n["energy-kcal_100g"]||n["energy-kcal"])>0;
-      }).map(p=>{
-        const n=p.nutriments;
-        const kcal100=Math.round(n["energy-kcal_100g"]||n["energy-kcal"]||0);
-        const prot100=Math.round((n["proteins_100g"]||0)*10)/10;
-        const carb100=Math.round((n["carbohydrates_100g"]||0)*10)/10;
-        const fat100=Math.round((n["fat_100g"]||0)*10)/10;
-        return{id:p.code||Math.random().toString(36).slice(2),name:p.product_name,brand:p.brands,kcal100,prot100,carb100,fat100};
-      });
-      setResults(valid);
-      if(!valid.length)setSearchErr("Nessun risultato. Prova un termine più semplice.");
-    }catch(e){setSearchErr("Errore di connessione. Riprova.");}
-    setLoading(false);
-  };
-
-  const handleQueryChange=(v)=>{
-    setQuery(v);
-    clearTimeout(debounceRef.current);
-    debounceRef.current=setTimeout(()=>searchFood(v),600);
-  };
-
-  const calcMacros=(food,g)=>{
-    const f=parseFloat(g)||0;
-    return{
-      kcal:Math.round(food.kcal100*f/100),
-      prot:Math.round(food.prot100*f/100*10)/10,
-      carb:Math.round(food.carb100*f/100*10)/10,
-      fat:Math.round(food.fat100*f/100*10)/10,
-    };
-  };
-
-  const addEntry=()=>{
-    if(!selFood)return;
-    const m=calcMacros(selFood,grams);
-    const entry={id:Date.now(),name:selFood.name,brand:selFood.brand,...m,grams:parseFloat(grams)||100,meal,ts:Date.now()};
-    const updated={...foodLog,[selDate]:[...dayLog,entry]};
-    setFoodLog(updated);
-    // reset
-    setSelFood(null);setQuery("");setResults([]);setGrams("100");
-  };
-
-  const removeEntry=(id)=>{
-    const updated={...foodLog,[selDate]:dayLog.filter(e=>e.id!==id)};
-    setFoodLog(updated);
-  };
-
-  const toggleFav=(food)=>{
-    const exists=foodFavs.find(f=>f.id===food.id);
-    if(exists)setFoodFavs(foodFavs.filter(f=>f.id!==food.id));
-    else setFoodFavs([...foodFavs,food].slice(-20));
-  };
-
-  const isFav=(id)=>foodFavs.some(f=>f.id===id);
-
-  // remaining kcal for evening (assume 70% of daily eaten by dinner time)
-  const hour=new Date().getHours();
-  const eaten=totals.kcal;
-  const remaining=kcalTarget-eaten;
-
-  // group by meal
-  const byMeal=MEAL_SLOTS.map(m=>({meal:m,entries:dayLog.filter(e=>e.meal===m)})).filter(x=>x.entries.length>0);
-
-  const preview=selFood&&grams?calcMacros(selFood,grams):null;
-
-  return(
-    <div>
-      {/* Daily summary ring */}
-      <div style={{...S.card,marginBottom:10}}>
-        <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:10}}>
-          {/* Kcal ring */}
-          <div style={{position:"relative",width:72,height:72,flexShrink:0}}>
-            <svg width={72} height={72} style={{transform:"rotate(-90deg)"}}>
-              <circle cx={36} cy={36} r={28} fill="none" stroke={C.bg4} strokeWidth={6}/>
-              <circle cx={36} cy={36} r={28} fill="none" stroke="#f97316" strokeWidth={6}
-                strokeDasharray={2*Math.PI*28}
-                strokeDashoffset={2*Math.PI*28*(1-Math.min(eaten/kcalTarget,1))}
-                strokeLinecap="round" style={{transition:"stroke-dashoffset 0.6s"}}/>
-            </svg>
-            <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-              <span style={{fontSize:13,fontWeight:900,color:"#f97316",lineHeight:1}}>{eaten>999?`${(eaten/1000).toFixed(1)}k`:eaten}</span>
-              <span style={{fontSize:7,color:C.text4}}>kcal</span>
-            </div>
-          </div>
-          <div style={{flex:1}}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-              <span style={{fontSize:9,color:C.text3}}>{eaten} / {kcalTarget} kcal</span>
-              <span style={{fontSize:9,color:remaining>0?"#10b981":"#f59e0b",fontWeight:700}}>{remaining>0?`${remaining} rimanenti`:`+${Math.abs(remaining)} surplus`}</span>
-            </div>
-            {/* Macro bars */}
-            {[["Prot",totals.prot,protTarget,"#ef4444"],["Carb",totals.carb,Math.round(kcalTarget*0.45/4),"#f59e0b"],["Grassi",totals.fat,Math.round(kcalTarget*0.25/9),"#3b82f6"]].map(([l,v,tgt,col])=>(
-              <div key={l} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
-                <span style={{fontSize:8,color:C.text3,width:30,flexShrink:0}}>{l}</span>
-                <div style={{flex:1,height:5,borderRadius:3,background:C.bg4,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${Math.min(v/tgt*100,100)}%`,background:col,transition:"width 0.5s",borderRadius:3}}/>
-                </div>
-                <span style={{fontSize:8,color:col,fontWeight:700,width:40,textAlign:"right",flexShrink:0}}>{v}g</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        {/* Protein target alert */}
-        {totals.prot>0&&totals.prot<protTarget*0.9&&(
-          <div style={{background:"#f59e0b18",borderRadius:7,padding:"5px 10px",display:"flex",alignItems:"center",gap:6}}>
-            <span style={{fontSize:12}}>⚠️</span>
-            <span style={{fontSize:10,color:"#f59e0b"}}>Proteine: {totals.prot}g su {protTarget}g target — mancano ancora {Math.round(protTarget-totals.prot)}g</span>
-          </div>
-        )}
-        {totals.prot>=protTarget&&(
-          <div style={{background:"#10b98118",borderRadius:7,padding:"5px 10px",display:"flex",alignItems:"center",gap:6}}>
-            <span style={{fontSize:12}}>✅</span>
-            <span style={{fontSize:10,color:"#10b981",fontWeight:700}}>Target proteico raggiunto! {totals.prot}g</span>
-          </div>
-        )}
-        {/* Suggerimento serale contestuale */}
-        {(()=>{
-          if(remaining<=0)return null;
-          const msgs=[
-            {from:5, to:10, icon:"☀️", label:"Inizio giornata", tip:`Hai ${remaining} kcal da distribuire. Punta a ~${Math.round(remaining*0.35)} kcal a pranzo e ~${Math.round(remaining*0.4)} kcal a cena.`},
-            {from:10,to:14, icon:"🌤", label:"A pranzo", tip:`Hai ancora ${remaining} kcal. Punta a un pranzo da ~${Math.round(remaining*0.55)} kcal e lascia il resto per cena.`},
-            {from:14,to:18, icon:"🌇", label:"Nel pomeriggio", tip:`Mancano ${remaining} kcal al target. Pensa a cosa mangerai a cena — hai spazio per un pasto da ~${Math.round(remaining*0.85)} kcal + uno spuntino.`},
-            {from:18,to:22, icon:"🌙", label:"Per la cena", tip:`Hai ${remaining} kcal rimaste per stasera${totals.prot<protTarget?` — includi ~${Math.round(protTarget-totals.prot)}g di proteine (es. ${Math.round((protTarget-totals.prot)/0.25)}g pollo)`:""}.`},
-            {from:22,to:24, icon:"🌛", label:"In serata", tip:remaining>300?`Hai ancora ${remaining} kcal — uno spuntino proteico ti aiuta a recuperare dopo l'allenamento.`:`Sei quasi al target (${remaining} kcal rimaste). Ottima giornata!`},
-          ];
-          const h=new Date().getHours();
-          const m=msgs.find(m=>h>=m.from&&h<m.to)||msgs[msgs.length-1];
-          if(!eaten)return null;
-          return(
-            <div style={{background:"#3b82f618",borderRadius:7,padding:"8px 10px",marginTop:6,border:"1px solid #3b82f630"}}>
-              <p style={{margin:"0 0 3px",fontSize:8,letterSpacing:1,color:"#3b82f6"}}>{m.icon} {m.label.toUpperCase()}</p>
-              <p style={{margin:0,fontSize:10,color:C.text2,lineHeight:1.4}}>{m.tip}</p>
-            </div>
-          );
-        })()}
-      </div>
-
-      {/* Meal log */}
-      {byMeal.map(({meal:m,entries})=>{
-        const mTot=entries.reduce((t,e)=>({kcal:t.kcal+e.kcal,prot:t.prot+e.prot}),{kcal:0,prot:0});
-        return(
-          <div key={m} style={{...S.card,marginBottom:8,padding:"10px 14px"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-              <span style={{fontSize:11,fontWeight:700,color:C.text}}>{MEAL_ICONS[m]||"🍴"} {m}</span>
-              <span style={{fontSize:9,color:C.text3}}>{mTot.kcal} kcal · {mTot.prot}g P</span>
-            </div>
-            {entries.map(e=>(
-              <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderTop:`1px solid ${C.border}`}}>
-                <div style={{flex:1,minWidth:0}}>
-                  <p style={{margin:0,fontSize:11,color:C.text2,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.name}</p>
-                  <p style={{margin:0,fontSize:9,color:C.text3}}>{e.grams}g · {e.prot}g P · {e.carb}g C · {e.fat}g F</p>
-                </div>
-                <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,marginLeft:8}}>
-                  <span style={{fontSize:11,fontWeight:700,color:"#f97316"}}>{e.kcal}</span>
-                  <button onClick={()=>removeEntry(e.id)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14,padding:"0 2px",lineHeight:1}}>🗑</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        );
-      })}
-
-      {/* Search form */}
-      <div style={{...S.card,marginBottom:8}}>
-        <p style={{margin:"0 0 10px",fontSize:8,letterSpacing:2,color:C.text3}}>🔍 CERCA ALIMENTO</p>
-
-        {/* Favourites toggle */}
-        {foodFavs.length>0&&(
-          <button onClick={()=>setShowFavs(v=>!v)} style={{...S.btn("ghost"),width:"100%",padding:"7px",fontSize:10,marginBottom:8,textAlign:"left"}}>
-            ⭐ Preferiti ({foodFavs.length}) {showFavs?"▲":"▼"}
-          </button>
-        )}
-        {showFavs&&foodFavs.length>0&&(
-          <div style={{marginBottom:10}}>
-            {foodFavs.map(f=>(
-              <div key={f.id} onClick={()=>{setSelFood(f);setShowFavs(false);}} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",background:C.bg3,borderRadius:8,marginBottom:4,cursor:"pointer",border:`1px solid ${selFood?.id===f.id?"#ef4444":C.border}`}}>
-                <div>
-                  <p style={{margin:0,fontSize:11,color:C.text2,fontWeight:500}}>{f.name}</p>
-                  <p style={{margin:0,fontSize:9,color:C.text3}}>{f.kcal100} kcal · {f.prot100}g P per 100g</p>
-                </div>
-                <button onClick={e=>{e.stopPropagation();toggleFav(f);}} style={{background:"none",border:"none",color:"#f59e0b",fontSize:16,cursor:"pointer",padding:"0 4px"}}>★</button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div style={{display:"flex",gap:8,marginBottom:8}}>
-          <input
-            style={{...S.inp,flex:1}}
-            placeholder="es. pasta barilla, pollo, yogurt..."
-            value={query}
-            onChange={e=>handleQueryChange(e.target.value)}
-          />
-          {query&&<button onClick={()=>{setQuery("");setResults([]);setSelFood(null);}} style={{...S.btn("ghost"),padding:"0 12px",fontSize:16,flexShrink:0}}>✕</button>}
-        </div>
-
-        {loading&&<p style={{fontSize:10,color:C.text3,textAlign:"center",padding:"8px 0"}}>🔍 Ricerca in corso...</p>}
-        {searchErr&&<p style={{fontSize:10,color:"#f59e0b",textAlign:"center",padding:"8px 0"}}>{searchErr}</p>}
-
-        {/* Search results */}
-        {results.length>0&&!selFood&&(
-          <div style={{marginBottom:8,maxHeight:220,overflowY:"auto",borderRadius:8,border:`1px solid ${C.border}`}}>
-            {results.map((r,i)=>(
-              <div key={r.id} onClick={()=>{setSelFood(r);setResults([]);}}
-                style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 12px",borderBottom:i<results.length-1?`1px solid ${C.border}`:"none",cursor:"pointer",background:C.bg2}}>
-                <div style={{flex:1,minWidth:0}}>
-                  <p style={{margin:0,fontSize:11,color:C.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</p>
-                  <p style={{margin:0,fontSize:9,color:C.text3}}>{r.brand||""}</p>
-                </div>
-                <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
-                  <p style={{margin:0,fontSize:11,fontWeight:700,color:"#f97316"}}>{r.kcal100} kcal</p>
-                  <p style={{margin:0,fontSize:9,color:"#ef4444"}}>{r.prot100}g P</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Selected food config */}
-        {selFood&&(
-          <div style={{background:C.bg3,borderRadius:10,padding:"12px",marginBottom:8,border:`1px solid #ef444440`}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-              <div style={{flex:1}}>
-                <p style={{margin:"0 0 2px",fontSize:12,fontWeight:700,color:C.text}}>{selFood.name}</p>
-                <p style={{margin:0,fontSize:9,color:C.text3}}>{selFood.kcal100} kcal · {selFood.prot100}g P · {selFood.carb100}g C · {selFood.fat100}g F per 100g</p>
-              </div>
-              <button onClick={()=>toggleFav(selFood)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,padding:"0 4px",color:isFav(selFood.id)?"#f59e0b":C.text4}}>
-                {isFav(selFood.id)?"★":"☆"}
-              </button>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-              <div>
-                <label style={S.lbl}>Grammi</label>
-                <input type="number" inputMode="decimal" style={{...S.inp,fontSize:20,fontWeight:900,textAlign:"center"}}
-                  value={grams} onChange={e=>setGrams(e.target.value)} placeholder="100"/>
-              </div>
-              <div>
-                <label style={S.lbl}>Pasto</label>
-                <select style={S.inp} value={meal} onChange={e=>setMeal(e.target.value)}>
-                  {MEAL_SLOTS.map(m=><option key={m} value={m}>{MEAL_ICONS[m]} {m}</option>)}
-                </select>
-              </div>
-            </div>
-            {/* Live macro preview */}
-            {preview&&(
-              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:10}}>
-                {[["KCAL",preview.kcal,"#f97316"],["PROT",preview.prot+"g","#ef4444"],["CARB",preview.carb+"g","#f59e0b"],["GRASSI",preview.fat+"g","#3b82f6"]].map(([l,v,col])=>(
-                  <div key={l} style={{background:col+"18",borderRadius:7,padding:"6px 4px",textAlign:"center"}}>
-                    <p style={{margin:0,fontSize:7,color:col,letterSpacing:1}}>{l}</p>
-                    <p style={{margin:0,fontSize:14,fontWeight:900,color:col,lineHeight:1.2}}>{v}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div style={{display:"flex",gap:8}}>
-              <button style={{...S.btn("red"),flex:1,padding:12,fontSize:12}} onClick={addEntry}>+ AGGIUNGI</button>
-              <button style={{...S.btn("ghost"),padding:"12px 14px",fontSize:11}} onClick={()=>{setSelFood(null);setQuery("");}}>✕</button>
-            </div>
-          </div>
-        )}
-
-        {dayLog.length===0&&!selFood&&!loading&&(
-          <p style={{fontSize:10,color:C.text4,textAlign:"center",padding:"12px 0"}}>Cerca un alimento per iniziare a tracciare i pasti di oggi</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function CalRing({kcalIn,kcalOut,C}){
   const pct=kcalOut>0?Math.min(kcalIn/kcalOut,1.3):0;
   const r=44,circ=2*Math.PI*r;
@@ -2331,7 +2015,7 @@ function ProtStreak({nutrEntries,bwKg,C}){
   );
 }
 
-function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,actEntries,setActEntries,tdeeEntries,setTdeeEntries,foodLog,setFoodLog,foodFavs,setFoodFavs,sessions}){
+function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,actEntries,setActEntries,tdeeEntries,setTdeeEntries,sessions}){
   const [height,setHeight]=useState(()=>db("il_height")||"");
   const [tab,setTab]=useState("giorno");
   const today=todayISO();
@@ -2423,7 +2107,7 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
   const prevDay=()=>{const d=new Date(selDate);d.setDate(d.getDate()-1);changeDate(d.toISOString().slice(0,10));};
   const nextDay=()=>{const d=new Date(selDate);d.setDate(d.getDate()+1);if(d.toISOString().slice(0,10)<=today)changeDate(d.toISOString().slice(0,10));};
 
-  const tabs=[["giorno","📅 GIORNO"],["pasti","🍽 PASTI"],["settimana","📊 TREND"],["peso","⚖ CORPO"]];
+  const tabs=[["giorno","📅 GIORNO"],["settimana","📊 TREND"],["peso","⚖ CORPO"]];
 
   return(
     <div style={S.app}>
@@ -2489,12 +2173,7 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
 
             {/* Form inserimento nutrizione */}
             <div style={{...S.card,marginBottom:10}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <p style={{margin:0,fontSize:8,letterSpacing:2,color:C.text3}}>🍽 INSERISCI PASTI — {selDate}</p>
-                <button onClick={()=>setTab("pasti")} style={{...S.btn("red"),padding:"5px 12px",fontSize:9,background:"#ef444422",color:"#ef4444",outline:"1px solid #ef444444"}}>
-                  🔍 Cerca alimenti →
-                </button>
-              </div>
+              <p style={{margin:"0 0 10px",fontSize:8,letterSpacing:2,color:C.text3}}>🍽 INSERISCI PASTI — {selDate}</p>
               {(()=>{
                 const p=parseInt(prot)||0,c=parseInt(carb)||0,f=parseInt(fat)||0;
                 const macroKcal=p*4+c*4+f*9;
@@ -2581,47 +2260,6 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
               </div>
               {selTdeeManual&&<p style={{margin:"6px 0 0",fontSize:9,color:"#3b82f6"}}>✓ {selTdeeManual} kcal registrate</p>}
             </div>
-          </div>
-        )}
-
-        {/* ── TAB PASTI ── */}
-        {tab==="pasti"&&(
-          <div className="fade-up">
-            {/* Day navigator */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
-              <button onClick={prevDay} style={{background:"none",border:"none",color:C.text2,fontSize:22,cursor:"pointer",padding:"0 8px",lineHeight:1}}>‹</button>
-              <div style={{textAlign:"center"}}>
-                <p style={{margin:0,fontSize:14,fontWeight:700,color:selDate===today?"#ef4444":C.text}}>{selDate===today?"OGGI":selDate}</p>
-              </div>
-              <button onClick={nextDay} style={{background:"none",border:"none",color:selDate>=today?C.text4:C.text2,fontSize:22,cursor:"pointer",padding:"0 8px",lineHeight:1}}>›</button>
-            </div>
-            <FoodTracker
-              foodLog={foodLog} setFoodLog={setFoodLog}
-              foodFavs={foodFavs} setFoodFavs={setFoodFavs}
-              selDate={selDate} bwKg={bwKg} C={C} S={S}
-            />
-            {/* Sync totals to nutrEntries when food log changes */}
-            {(()=>{
-              const dayFood=foodLog[selDate]||[];
-              if(dayFood.length>0){
-                const tot=dayFood.reduce((t,e)=>({kcal:t.kcal+(e.kcal||0),prot:t.prot+(e.prot||0),carb:t.carb+(e.carb||0),fat:t.fat+(e.fat||0)}),{kcal:0,prot:0,carb:0,fat:0});
-                const existing=nutrEntries[selDate]||{};
-                // only show sync button if differs
-                const changed=existing.kcal!==tot.kcal||existing.prot!==tot.prot;
-                if(changed)return(
-                  <div style={{...S.card,borderLeft:"3px solid #10b981",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
-                    <div>
-                      <p style={{margin:"0 0 2px",fontSize:9,color:"#10b981",letterSpacing:1}}>SINCRONIZZA CON NUTRIZIONE</p>
-                      <p style={{fontSize:9,color:C.text3,margin:0}}>I dati pasti ({tot.kcal} kcal, {tot.prot}g P) non sono ancora salvati in Nutrizione</p>
-                    </div>
-                    <button style={{...S.btn("red"),padding:"8px 14px",fontSize:10,flexShrink:0,background:"#10b981"}} onClick={()=>setNutrEntries({...nutrEntries,[selDate]:{kcal:Math.round(tot.kcal),prot:Math.round(tot.prot),carb:Math.round(tot.carb),fat:Math.round(tot.fat)}})}>
-                      💾 SYNC
-                    </button>
-                  </div>
-                );
-              }
-              return null;
-            })()}
           </div>
         )}
 
@@ -3251,7 +2889,7 @@ function NutrNerdDash({nutrEntries,tdeeEntries,bwEntries,sessions,C,S}){
 // ══════════════════════════════════════════════
 // ── NOTIFICATION CENTER ──
 // ══════════════════════════════════════════════
-function NotificationCenter({sessions,actEntries,C,S}){
+function NotificationCenter({sessions,C,S}){
   const [perm,setPerm]=React.useState(()=>typeof Notification!=='undefined'?Notification.permission:'denied');
   const [remHour,setRemHour]=React.useState(()=>db("il_notif_hour")||8);
   const [remEnabled,setRemEnabled]=React.useState(()=>db("il_notif_on")||false);
@@ -3277,7 +2915,7 @@ function NotificationCenter({sessions,actEntries,C,S}){
     }
   };
   const permColor={granted:"#10b981",denied:"#ef4444",default:"#f59e0b"}[perm]||"#6b7280";
-  const streak=getStreak(sessions,actEntries);
+  const streak=getStreak(sessions);
   return(
     <div style={S.card}>
       <p style={{margin:"0 0 12px",fontSize:9,letterSpacing:2,color:C.text3}}>🔔 NOTIFICHE & REMINDER</p>
@@ -3697,7 +3335,7 @@ function AnalisiPanel({sessions,bwEntries,actEntries,nutrEntries,tdeeEntries,rec
       )}
       {atab==="notifiche"&&(
         <div>
-          <NotificationCenter sessions={sessions} actEntries={actEntries} C={C} S={S}/>
+          <NotificationCenter sessions={sessions} C={C} S={S}/>
         </div>
       )}
     </div>
@@ -4234,10 +3872,6 @@ function FinishPage({C,S,workoutStart,program,activeDay,logData,sessionsRef,onDo
   const totalExercises=day.exercises.length;
   const loggedCount=day.exercises.filter(ex=>logData[ex.name]?.weight>0).length;
   const completionPct=totalExercises>0?Math.round((loggedCount/totalExercises)*100):100;
-  // stima kcal automatica: MET 5.0 (forza) × peso × ore
-  const bwKg=parseFloat(db("il_bw")?.[db("il_bw").length-1]?.w)||75;
-  const durMin=parseInt(dur)||0;
-  const kcalEstimate=durMin>0?Math.round(5.0*bwKg*(durMin/60)):null;
   const save=()=>{
     const exercises=day.exercises.map(ex=>{
       const d=logData[ex.name]||{};
@@ -4280,12 +3914,7 @@ function FinishPage({C,S,workoutStart,program,activeDay,logData,sessionsRef,onDo
             </div>
             <div>
               <label style={S.lbl}>🔥 Calorie (kcal)</label>
-              <input type="number" inputMode="numeric" style={{...S.inp,fontSize:28,fontWeight:900,textAlign:"center",padding:"14px 8px"}} value={kcal} onChange={e=>setKcal(e.target.value)} placeholder={kcalEstimate||"400"}/>
-              {kcalEstimate&&!kcal&&(
-                <p style={{margin:"4px 0 0",fontSize:9,color:C.text3,textAlign:"center",cursor:"pointer"}} onClick={()=>setKcal(String(kcalEstimate))}>
-                  🤖 stima: ~{kcalEstimate} kcal <span style={{color:"#3b82f6"}}>tap per usare</span>
-                </p>
-              )}
+              <input type="number" inputMode="numeric" style={{...S.inp,fontSize:28,fontWeight:900,textAlign:"center",padding:"14px 8px"}} value={kcal} onChange={e=>setKcal(e.target.value)} placeholder="400"/>
               {iK>0&&iD>0&&<p style={{margin:"4px 0 0",fontSize:9,color:"#f97316",textAlign:"center"}}>{(iK/iD).toFixed(0)} kcal/min</p>}
             </div>
           </div>
@@ -4333,8 +3962,6 @@ function GymTracker(){
   const [actEntries,setActEntries]=useState({});
   const [tdeeEntries,setTdeeEntries]=useState({});
   const [bwEntries,setBwEntries]=useState([]);
-  const [foodLog,setFoodLog]=useState({});
-  const [foodFavs,setFoodFavs]=useState([]);
   const [calOffset,setCalOffset]=useState(0);
   const [editingSession,setEditingSession]=useState(null);
   const sessionsRef=useRef([]);
@@ -4352,8 +3979,6 @@ function GymTracker(){
     if(a)setActEntries(a);
     if(td)setTdeeEntries(td);
     if(Array.isArray(bw)&&bw.length)setBwEntries(bw);
-    const fl=db(FOOD_KEY);if(fl&&typeof fl==='object')setFoodLog(fl);
-    const ff=db(FOOD_FAV_KEY);if(Array.isArray(ff))setFoodFavs(ff);
   },[]);
 
   const toggleTheme=()=>{
@@ -4382,7 +4007,7 @@ function GymTracker(){
   const csvRow=(...cols)=>cols.map(c=>{const s=String(c??'');return s.includes(',')||s.includes('"')||s.includes('\n')?`"${s.replace(/"/g,'""')}"`:`${s}`;}).join(',')+'\n';
 
   const exportAllJSON=()=>{
-    const payload={exportDate:todayISO(),version:2,program,sessions,bwEntries,nutrEntries,actEntries,tdeeEntries,goals,foodLog};
+    const payload={exportDate:todayISO(),version:2,program,sessions,bwEntries,nutrEntries,actEntries,tdeeEntries,goals};
     dl(JSON.stringify(payload,null,2),`ironlog_backup_${todayISO()}.json`,"application/json");
     notify("Backup JSON esportato ✓");
   };
@@ -4436,7 +4061,6 @@ function GymTracker(){
         if(data.actEntries&&typeof data.actEntries==='object'){setActEntries(data.actEntries);db(ACT_KEY,data.actEntries);}
         if(data.tdeeEntries&&typeof data.tdeeEntries==='object'){setTdeeEntries(data.tdeeEntries);db(TDEE_KEY,data.tdeeEntries);}
         if(data.goals&&typeof data.goals==='object'){setGoals(data.goals);db(GOALS_KEY,data.goals);}
-        if(data.foodLog&&typeof data.foodLog==='object'){setFoodLog(data.foodLog);db(FOOD_KEY,data.foodLog);}
         notify("Dati importati con successo ✓","#10b981");
       }catch(_){notify("Errore: file non valido","#ef4444");}
     };
@@ -4626,19 +4250,15 @@ function GymTracker(){
             {allScored?"🏁 TERMINA ALLENAMENTO":"⚠ Inserisci difficoltà per ogni esercizio"}
           </button>
         </div>
-        <TabBar view="log" setView={(v)=>{
-          if(v!=="log"&&v!=="finish"){
-            if(window.confirm("⚠️ Allenamento in corso!\n\nSe esci ora perdi tutti i dati inseriti.\nSei sicuro di voler uscire?"))setView(v);
-          }else setView(v);
-        }} C={C}/>
+        <TabBar view="log" setView={setView} C={C}/>
       </div>
     );
   }
 
   if(view==="history"){
     const allExNames=program?[...new Set(program.days.flatMap(d=>d.exercises.map(e=>e.name)))]:[];
-    const records=useMemo(()=>getRecords(sessions),[sessions]);
-    const streak=useMemo(()=>getStreak(sessions,actEntries),[sessions,actEntries]);
+    const records=getRecords(sessions);
+    const streak=getStreak(sessions);
     const totMins=sessions.reduce((s,x)=>s+(x.duration||0),0);
     const totKcal=sessions.reduce((s,x)=>s+(x.kcal||0),0);
     const withDur=sessions.filter(s=>s.duration>0);
@@ -4772,8 +4392,6 @@ function GymTracker(){
           nutrEntries={nutrEntries} setNutrEntries={(v)=>{setNutrEntries(v);db(NUTR_KEY,v);}}
           actEntries={actEntries} setActEntries={(v)=>{setActEntries(v);db(ACT_KEY,v);}}
           tdeeEntries={tdeeEntries} setTdeeEntries={(v)=>{setTdeeEntries(v);db(TDEE_KEY,v);}}
-          foodLog={foodLog} setFoodLog={(v)=>{setFoodLog(v);db(FOOD_KEY,v);}}
-          foodFavs={foodFavs} setFoodFavs={(v)=>{setFoodFavs(v);db(FOOD_FAV_KEY,v);}}
           sessions={sessions}
         />
         <TabBar view="fisico" setView={setView} C={C}/>
@@ -4782,8 +4400,8 @@ function GymTracker(){
   }
 
   // ── WORKOUT DASHBOARD ──
-  const streak=useMemo(()=>getStreak(sessions,actEntries),[sessions,actEntries]);
-  const records=useMemo(()=>getRecords(sessions),[sessions]);
+  const streak=getStreak(sessions);
+  const records=getRecords(sessions);
   const lastSess=sessions.length?sessions[sessions.length-1]:null;
 
   const WorkoutInner=()=>{
