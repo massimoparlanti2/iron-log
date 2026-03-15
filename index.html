@@ -4378,8 +4378,8 @@ function GymTracker(){
 
   if(view==="history"){
     const allExNames=program?[...new Set(program.days.flatMap(d=>d.exercises.map(e=>e.name)))]:[];
-    const records=useMemo(()=>getRecords(sessions),[sessions]);
-    const streak=useMemo(()=>getStreak(sessions,actEntries),[sessions,actEntries]);
+    const records=getRecords(sessions);
+    const streak=getStreak(sessions,actEntries);
     const totMins=sessions.reduce((s,x)=>s+(x.duration||0),0);
     const totKcal=sessions.reduce((s,x)=>s+(x.kcal||0),0);
     const withDur=sessions.filter(s=>s.duration>0);
@@ -4621,8 +4621,8 @@ function GymTracker(){
   }
 
   // ── WORKOUT DASHBOARD ──
-  const streak=useMemo(()=>getStreak(sessions,actEntries),[sessions,actEntries]);
-  const records=useMemo(()=>getRecords(sessions),[sessions]);
+  const streak=getStreak(sessions,actEntries);
+  const records=getRecords(sessions);
   const lastSess=sessions.length?sessions[sessions.length-1]:null;
 
   const WorkoutInner=()=>{
