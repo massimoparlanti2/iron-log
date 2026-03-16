@@ -2185,28 +2185,101 @@ function BwGoalCard({bwEntries,lastBw,C,S}){
   const [bwGoal,setBwGoalState]=useState(()=>db(BW_GOAL_KEY)||"");
   const [editGoal,setEditGoal]=useState(false);
   const [goalInput,setGoalInput]=useState(()=>db(BW_GOAL_KEY)||"");
+  const [window,setWindow]=useState(30); // giorni per la regressione
   const saveGoal=()=>{db(BW_GOAL_KEY,goalInput);setBwGoalState(goalInput);setEditGoal(false);};
+
   const goalKg=parseFloat(bwGoal)||0;
   const diffKg=lastBw&&goalKg?Math.round((goalKg-lastBw.w)*10)/10:null;
-  const goalOk=diffKg!==null&&Math.abs(diffKg)<0.5;
+  const goalOk=diffKg!==null&&Math.abs(diffKg)<0.3;
+
+  // Regressione lineare su date reali (giorni dall'epoca)
   const projection=(()=>{
     if(bwEntries.length<3||!bwGoal)return null;
-    const recent=bwEntries.slice(-10);
-    const n=recent.length;
-    const xs=recent.map((_,i)=>i),ys=recent.map(e=>e.w);
-    const sumX=xs.reduce((a,b)=>a+b,0),sumY=ys.reduce((a,b)=>a+b,0);
-    const sumXY=xs.reduce((t,x,i)=>t+x*ys[i],0),sumX2=xs.reduce((t,x)=>t+x*x,0);
-    const slope=(n*sumXY-sumX*sumY)/(n*sumX2-sumX*sumX)||0;
-    const intercept=(sumY-slope*sumX)/n;
     const target=parseFloat(bwGoal);
-    const current=recent[recent.length-1].w;
+    const now=new Date();
+    // Filtra per finestra temporale selezionata
+    const cutoff=new Date(now);cutoff.setDate(cutoff.getDate()-window);
+    const pts=bwEntries
+      .filter(e=>new Date(e.date)>=cutoff)
+      .map(e=>({x:Math.round((new Date(e.date)-new Date(bwEntries[0].date))/86400000),y:e.w,date:e.date}));
+    if(pts.length<2)return{err:"Pochi dati nel periodo selezionato"};
+    // Regressione lineare OLS
+    const n=pts.length;
+    const sumX=pts.reduce((t,p)=>t+p.x,0);
+    const sumY=pts.reduce((t,p)=>t+p.y,0);
+    const sumXY=pts.reduce((t,p)=>t+p.x*p.y,0);
+    const sumX2=pts.reduce((t,p)=>t+p.x*p.x,0);
+    const denom=n*sumX2-sumX*sumX;
+    if(!denom)return{err:"Dati insufficienti"};
+    const slope=(n*sumXY-sumX*sumY)/denom; // kg/giorno
+    const intercept=(sumY-slope*sumX)/n;
+    // R² per valutare affidabilità
+    const yMean=sumY/n;
+    const ssTot=pts.reduce((t,p)=>t+(p.y-yMean)**2,0);
+    const ssRes=pts.reduce((t,p)=>t+(p.y-(slope*p.x+intercept))**2,0);
+    const r2=ssTot>0?Math.round((1-ssRes/ssTot)*100):0;
+    const current=lastBw.w;
+    const todayX=Math.round((now-new Date(bwEntries[0].date))/86400000);
     const diff=target-current;
-    if(Math.abs(slope)<0.001)return{daysNeeded:null,weeklyRate:0,current,target,diff};
+    if(Math.abs(slope)<0.0001)return{slope:0,weeklyRate:0,current,target,diff,r2,pts,intercept,todayX,err:null};
     const daysNeeded=Math.round(diff/slope);
     const weeklyRate=Math.round(slope*7*100)/100;
-    const eta=new Date();eta.setDate(eta.getDate()+daysNeeded);
-    return{daysNeeded,weeklyRate,current,target,diff,eta:daysNeeded>0&&daysNeeded<1000?eta.toLocaleDateString("it-IT",{month:"short",year:"numeric"}):null};
+    const eta=new Date(now);eta.setDate(eta.getDate()+daysNeeded);
+    const etaStr=daysNeeded>0&&daysNeeded<730?eta.toLocaleDateString("it-IT",{day:"numeric",month:"short",year:"numeric"}):null;
+    return{slope,weeklyRate,current,target,diff,daysNeeded,etaStr,r2,pts,intercept,todayX,err:null};
   })();
+
+  // Mini grafico SVG con trend line e proiezione
+  const Chart=(()=>{
+    if(!projection||projection.err||!projection.pts||projection.pts.length<2)return null;
+    const {pts,slope,intercept,todayX,target}=projection;
+    const W=280,H=70,PX=32,PY=8;
+    // estendi fino alla data target per il grafico
+    const daysNeeded=projection.daysNeeded||0;
+    const projX=daysNeeded>0&&daysNeeded<365?todayX+daysNeeded:null;
+    const allX=[...pts.map(p=>p.x),projX||todayX];
+    const allY=[...pts.map(p=>p.y),target];
+    const minX=Math.min(...allX),maxX=Math.max(...allX);
+    const minY=Math.min(...allY)-0.5,maxY=Math.max(...allY)+0.5;
+    const spanX=maxX-minX||1,spanY=maxY-minY||1;
+    const px=(x)=>PX+(x-minX)/spanX*(W-PX*2);
+    const py=(y)=>H-PY-((y-minY)/spanY)*(H-PY*2);
+    // punti reali
+    const dotPath=pts.map((p,i)=>`${i===0?"M":"L"}${px(p.x).toFixed(1)},${py(p.y).toFixed(1)}`).join(" ");
+    // linea di trend
+    const tx0=pts[0].x,tx1=projX||todayX;
+    const ty0=slope*tx0+intercept,ty1=slope*tx1+intercept;
+    // area fill
+    const areaPath=`M${px(tx0).toFixed(1)},${py(ty0).toFixed(1)} L${px(tx1).toFixed(1)},${py(ty1).toFixed(1)} L${px(tx1).toFixed(1)},${H-PY} L${px(tx0).toFixed(1)},${H-PY} Z`;
+    const trendColor=slope<0?"#10b981":slope>0?"#ef4444":"#3b82f6";
+    const targetY=py(target);
+    return(
+      <svg width="100%" viewBox={`0 0 ${W} ${H+20}`} style={{display:"block",overflow:"visible",marginBottom:6}}>
+        {/* area tendenza */}
+        <path d={areaPath} fill={trendColor} opacity="0.08"/>
+        {/* linea target orizzontale */}
+        <line x1={PX} y1={targetY} x2={W-PX} y2={targetY} stroke="#3b82f6" strokeWidth={1} strokeDasharray="4 3"/>
+        <text x={W-PX+2} y={targetY+4} fill="#3b82f6" fontSize={7}>{target}kg</text>
+        {/* punti reali */}
+        <path d={dotPath} fill="none" stroke={C.text3} strokeWidth={1.5} strokeLinejoin="round"/>
+        {pts.map((p,i)=><circle key={i} cx={px(p.x)} cy={py(p.y)} r={2.5} fill={C.text2}/>)}
+        {/* linea trend */}
+        <line x1={px(tx0)} y1={py(ty0)} x2={px(tx1)} y2={py(ty1)} stroke={trendColor} strokeWidth={2} strokeLinecap="round" strokeDasharray={projX?"6 4":"none"}/>
+        {/* punto proiezione */}
+        {projX&&<circle cx={px(projX)} cy={py(target)} r={4} fill="#3b82f6" stroke="#fff" strokeWidth={1.5}/>}
+        {/* punto oggi */}
+        <circle cx={px(todayX)} cy={py(projection.current)} r={4} fill={trendColor} stroke="#fff" strokeWidth={1.5}/>
+        {/* etichette asse X */}
+        {[pts[0],pts[Math.floor(pts.length/2)],pts[pts.length-1]].filter((p,i,a)=>a.indexOf(p)===i).map((p,i)=>(
+          <text key={i} x={px(p.x)} y={H+14} fill={C.text4} fontSize={6} textAnchor="middle">{p.date.slice(5)}</text>
+        ))}
+        {/* asse Y */}
+        <text x={2} y={PY+5} fill={C.text4} fontSize={6}>{maxY.toFixed(1)}</text>
+        <text x={2} y={H-PY+2} fill={C.text4} fontSize={6}>{minY.toFixed(1)}</text>
+      </svg>
+    );
+  })();
+
   if(!lastBw&&!bwGoal&&!editGoal)return null;
   return(
     <div style={{...S.card,borderLeft:`3px solid ${goalOk?"#10b981":"#3b82f6"}`}}>
@@ -2226,33 +2299,68 @@ function BwGoalCard({bwEntries,lastBw,C,S}){
       ):(
         <>
           {bwGoal&&lastBw&&(
-            <div style={{marginBottom:projection&&projection.eta&&!goalOk?10:0}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                <span style={{fontSize:10,color:C.text3}}>{lastBw.w}kg ora</span>
-                <span style={{fontSize:10,fontWeight:700,color:"#3b82f6"}}>{goalKg}kg target</span>
+            <div style={{marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:4}}>
+                <span style={{fontSize:12,fontWeight:700,color:C.text}}>{lastBw.w}kg <span style={{fontSize:9,color:C.text3,fontWeight:400}}>ora</span></span>
+                <span style={{fontSize:9,color:C.text3}}>→</span>
+                <span style={{fontSize:12,fontWeight:700,color:"#3b82f6"}}>{goalKg}kg <span style={{fontSize:9,color:C.text3,fontWeight:400}}>target</span></span>
               </div>
-              <div style={{height:8,borderRadius:4,background:C.bg4,overflow:"hidden"}}>
-                <div style={{height:"100%",width:`${Math.min(lastBw.w/goalKg*100,100)}%`,background:goalOk?"#10b981":"#3b82f6",borderRadius:4,transition:"width 0.6s"}}/>
+              <div style={{height:6,borderRadius:3,background:C.bg4,overflow:"hidden"}}>
+                <div style={{height:"100%",width:`${Math.min(Math.max((lastBw.w-(lastBw.w-Math.abs(diffKg||0)))/Math.abs(diffKg||1)*100,2),100)}%`,background:goalOk?"#10b981":"#3b82f6",borderRadius:3,transition:"width 0.6s"}}/>
               </div>
-              <p style={{margin:"4px 0 0",fontSize:9,color:goalOk?"#10b981":diffKg<0?"#ef4444":"#10b981"}}>
-                {goalOk?"🎉 Obiettivo raggiunto!":diffKg>0?`+${diffKg}kg da aggiungere`:`${diffKg}kg da perdere`}
+              <p style={{margin:"4px 0 0",fontSize:9,color:goalOk?"#10b981":C.text3}}>
+                {goalOk?"🎉 Obiettivo raggiunto!":diffKg!==null?(diffKg>0?`+${diffKg}kg da guadagnare`:`${Math.abs(diffKg)}kg da perdere`):""}
               </p>
             </div>
           )}
-          {projection&&projection.eta&&!goalOk&&(
-            <div style={{background:"#3b82f618",borderRadius:8,padding:"8px 12px"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div>
-                  <p style={{margin:"0 0 2px",fontSize:8,color:"#3b82f6",letterSpacing:1}}>PROIEZIONE LINEARE</p>
-                  <p style={{margin:0,fontSize:11,color:C.text2}}>Arrivo stimato: <strong style={{color:"#3b82f6"}}>{projection.eta}</strong></p>
-                </div>
-                <div style={{textAlign:"right"}}>
-                  <p style={{margin:"0 0 1px",fontSize:8,color:C.text3}}>ritmo attuale</p>
-                  <p style={{margin:0,fontSize:12,fontWeight:700,color:projection.weeklyRate>0?"#10b981":"#ef4444"}}>{projection.weeklyRate>0?"+":""}{projection.weeklyRate}kg/sett</p>
-                </div>
-              </div>
+
+          {/* Selettore finestra temporale */}
+          {bwGoal&&bwEntries.length>=3&&(
+            <div style={{display:"flex",gap:5,marginBottom:10}}>
+              {[[14,"2 sett."],[30,"1 mese"],[60,"2 mesi"],[90,"3 mesi"],[bwEntries.length>0?Math.round((new Date()-new Date(bwEntries[0].date))/86400000):180,"Tutto"]].map(([d,label])=>(
+                <button key={d} onClick={()=>setWindow(d)} style={{flex:1,padding:"4px 2px",borderRadius:6,border:`1px solid ${window===d?"#3b82f6":C.border2}`,background:window===d?"#3b82f618":"transparent",color:window===d?"#3b82f6":C.text3,fontSize:9,cursor:"pointer",fontFamily:"inherit",fontWeight:window===d?700:400}}>
+                  {label}
+                </button>
+              ))}
             </div>
           )}
+
+          {/* Grafico */}
+          {Chart}
+
+          {/* Risultato proiezione */}
+          {projection&&!projection.err&&bwGoal&&!goalOk&&(
+            <div style={{background:"#3b82f618",borderRadius:8,padding:"10px 12px"}}>
+              {projection.weeklyRate===0?(
+                <p style={{margin:0,fontSize:10,color:C.text3}}>Peso stabile nel periodo selezionato — nessuna tendenza rilevata.</p>
+              ):(
+                <>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:projection.etaStr?8:0}}>
+                    <div style={{textAlign:"center"}}>
+                      <p style={{margin:"0 0 2px",fontSize:7,color:C.text3,letterSpacing:1}}>RITMO/SETT</p>
+                      <p style={{margin:0,fontSize:14,fontWeight:900,color:projection.weeklyRate<0?"#10b981":"#ef4444"}}>{projection.weeklyRate>0?"+":""}{projection.weeklyRate}kg</p>
+                    </div>
+                    <div style={{textAlign:"center"}}>
+                      <p style={{margin:"0 0 2px",fontSize:7,color:C.text3,letterSpacing:1}}>R² AFFIDAB.</p>
+                      <p style={{margin:0,fontSize:14,fontWeight:900,color:projection.r2>=70?"#10b981":projection.r2>=40?"#f59e0b":"#ef4444"}}>{projection.r2}%</p>
+                    </div>
+                    <div style={{textAlign:"center"}}>
+                      <p style={{margin:"0 0 2px",fontSize:7,color:C.text3,letterSpacing:1}}>PUNTI DATI</p>
+                      <p style={{margin:0,fontSize:14,fontWeight:900,color:C.text}}>{projection.pts.length}</p>
+                    </div>
+                  </div>
+                  {projection.etaStr&&(
+                    <div style={{borderTop:`1px solid ${C.border}`,paddingTop:8}}>
+                      <p style={{margin:"0 0 2px",fontSize:8,color:"#3b82f6",letterSpacing:1}}>ARRIVO STIMATO</p>
+                      <p style={{margin:0,fontSize:13,fontWeight:700,color:C.text}}>{projection.etaStr} <span style={{fontSize:9,color:C.text3,fontWeight:400}}>({projection.daysNeeded} giorni)</span></p>
+                    </div>
+                  )}
+                  {projection.r2<40&&<p style={{margin:"6px 0 0",fontSize:9,color:"#f59e0b"}}>⚠ Affidabilità bassa ({projection.r2}%) — il peso oscilla molto, prova una finestra più lunga.</p>}
+                </>
+              )}
+            </div>
+          )}
+          {projection?.err&&<p style={{margin:0,fontSize:10,color:C.text3}}>{projection.err}</p>}
           {!bwGoal&&<p style={{margin:0,fontSize:10,color:C.text3,cursor:"pointer"}} onClick={()=>setEditGoal(true)}>Tocca ✏ per impostare un obiettivo di peso</p>}
         </>
       )}
