@@ -4384,7 +4384,7 @@ function Confetti(){
   );
 }
 
-function FinishPage({C,S,workoutStart,program,activeDay,logData,sessionsRef,onDone}){
+function FinishPage({C,S,workoutStart,program,activeDay,logData,sessionsRef,checkinData,onDone}){
   const [dur,setDur]=useState(()=>String(workoutStart?Math.round((Date.now()-workoutStart)/60000):0));
   const [kcal,setKcal]=useState("");
   const [note,setNote]=useState("");
@@ -4688,7 +4688,7 @@ function GymTracker(){
   }
 
   if(view==="finish"){
-    return(<><PRBanner/><FinishPage C={C} S={S} workoutStart={workoutStart} program={program} activeDay={activeDay} logData={logData} sessionsRef={sessionsRef} onDone={handleFinish}/><TabBar view="finish" setView={setView} C={C}/></>);
+    return(<><PRBanner/><FinishPage C={C} S={S} workoutStart={workoutStart} program={program} activeDay={activeDay} logData={logData} sessionsRef={sessionsRef} checkinData={checkinData} onDone={handleFinish}/><TabBar view="finish" setView={setView} C={C}/></>);
   }
 
   if(view==="setup"||view==="setup-edit"){
