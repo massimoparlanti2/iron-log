@@ -77,7 +77,7 @@ const DEFAULT_EX={
 const QUOTES=["Il dolore di oggi è la forza di domani.","Non fermarti quando sei stanco. Fermati quando hai finito.","Ogni rep ti avvicina alla versione migliore di te.","La disciplina batte la motivazione ogni giorno.","Il corpo raggiunge ciò che la mente crede.","Progressi lenti sono sempre meglio di nessun progresso.","La fatica di oggi è il trofeo di domani.","Non si tratta di essere il migliore. Si tratta di essere migliore di ieri."];
 
 const PROG_KEY="il_v10_prog", SESS_KEY="il_v10_sess", THEME_KEY="il_theme";
-const BW_KEY="il_bw", GOALS_KEY="il_goals", NUTR_KEY="il_nutr", ACT_KEY="il_act", TDEE_KEY="il_tdee", BW_GOAL_KEY="il_bw_goal", CHECKIN_KEY="il_checkin";
+const BW_KEY="il_bw", GOALS_KEY="il_goals", NUTR_KEY="il_nutr", ACT_KEY="il_act", TDEE_KEY="il_tdee", BW_GOAL_KEY="il_bw_goal", CHECKIN_KEY="il_checkin", KCAL_GOAL_KEY="il_kcal_goal";
 
 // ══════════════════════════════════════════════
 // ── GAMIFICATION SYSTEM ──
@@ -389,6 +389,21 @@ function scoreLabel(s){
   if(s>=40)return"Discreto";
   return"Da migliorare";
 }
+
+// kcalGoal structure: {mode:"deficit"|"surplus"|"maintain", pct:number, kcalOverride:number|null}
+// mode deficit = TDEE * (1 - pct/100), surplus = TDEE * (1 + pct/100)
+function getKcalTarget(kcalGoal, tdee, bmr){
+  if(!kcalGoal||!tdee) return null;
+  if(kcalGoal.kcalOverride) return kcalGoal.kcalOverride;
+  const pct=(kcalGoal.pct||20)/100;
+  if(kcalGoal.mode==="deficit") return Math.max(Math.round(tdee*(1-pct)), bmr||1200);
+  if(kcalGoal.mode==="surplus") return Math.round(tdee*(1+pct));
+  return Math.round(tdee); // maintain
+}
+
+// kg di grasso perso/guadagnato atteso da un deficit/surplus calorico
+// 1kg grasso ≈ 7700 kcal
+function kcalToKg(kcalDelta){ return Math.round(kcalDelta/7700*100)/100; }
 
 // ── STRENGTH SCIENCE ──
 // ══════════════════════════════════════════════
@@ -2181,6 +2196,217 @@ function ProtStreak({nutrEntries,bwKg,C}){
 }
 
 // ── BW GOAL CARD ──
+// ══════════════════════════════════════════════
+// ── KCAL GOAL PANEL ──
+// ══════════════════════════════════════════════
+function KcalGoalPanel({nutrEntries,tdeeEntries,actEntries,sessions,bwEntries,C,S}){
+  const [goal,setGoalState]=useState(()=>db(KCAL_GOAL_KEY)||{mode:"deficit",pct:20,kcalOverride:null});
+  const [editing,setEditing]=useState(false);
+  const [editMode,setEditMode]=useState(goal.mode||"deficit");
+  const [editPct,setEditPct]=useState(goal.pct||20);
+  const [editOverride,setEditOverride]=useState(goal.kcalOverride||"");
+
+  const saveGoal=()=>{
+    const g={mode:editMode,pct:parseInt(editPct)||20,kcalOverride:editOverride?parseInt(editOverride):null};
+    db(KCAL_GOAL_KEY,g);setGoalState(g);setEditing(false);
+  };
+
+  // Calcola TDEE medio degli ultimi 7 giorni disponibili
+  const today=todayISO();
+  const last7=Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-i);return d.toISOString().slice(0,10);});
+  const tdeeValues=last7.map(d=>{
+    if(tdeeEntries[d]) return tdeeEntries[d];
+    const acts=actEntries[d]||[];
+    const gym=(sessions||[]).filter(s=>s.date===d).reduce((t,s)=>t+(s.kcal||0),0);
+    const act=acts.reduce((t,a)=>t+(a.kcal||0),0);
+    return gym+act>0?gym+act:null;
+  }).filter(Boolean);
+  const avgTdee=tdeeValues.length?Math.round(tdeeValues.reduce((a,b)=>a+b,0)/tdeeValues.length):null;
+
+  // BMR per safety floor
+  const lastBw=bwEntries.length?bwEntries[bwEntries.length-1]:null;
+  const heightCm=parseInt(db("il_height"))||175;
+  const bmrVal=lastBw?calcBMR(lastBw.w,heightCm,30,true):null;
+
+  const tdeeForCalc=avgTdee||(bmrVal?Math.round(bmrVal*1.5):null);
+  const kcalTarget=getKcalTarget(goal,tdeeForCalc,bmrVal);
+
+  // Dati settimanali
+  const weekData=last7.reverse().map(d=>{
+    const n=nutrEntries[d];
+    const kcalIn=n?.kcal||null;
+    const acts=actEntries[d]||[];
+    const gym=(sessions||[]).filter(s=>s.date===d).reduce((t,s)=>t+(s.kcal||0),0);
+    const act=acts.reduce((t,a)=>t+(a.kcal||0),0);
+    const tdeeManual=tdeeEntries[d]||null;
+    const kcalOut=tdeeManual||(avgTdee||(gym+act||null));
+    const bal=kcalIn&&kcalOut?kcalIn-kcalOut:null;
+    const vsTarget=kcalIn&&kcalTarget?kcalIn-kcalTarget:null;
+    return{d,kcalIn,kcalOut,bal,vsTarget,isToday:d===today};
+  });
+  const daysLogged=weekData.filter(x=>x.kcalIn).length;
+  const weekDeficit=weekData.reduce((t,x)=>t+(x.vsTarget||0),0);
+  const weekDeficitKg=kcalToKg(Math.abs(weekDeficit));
+  const todayData=weekData[weekData.length-1];
+  const todayRemaining=kcalTarget&&todayData.kcalIn!=null?kcalTarget-todayData.kcalIn:null;
+  const belowBMR=todayData.kcalIn&&bmrVal&&todayData.kcalIn<bmrVal;
+
+  // Proiezione peso dal deficit medio
+  const avgDailyDelta=daysLogged?weekData.filter(x=>x.vsTarget!=null).reduce((t,x)=>t+(x.vsTarget||0),0)/daysLogged:null;
+  const projKgPerWeek=avgDailyDelta?kcalToKg(avgDailyDelta*7):null;
+
+  const modeColors={deficit:"#10b981",surplus:"#f59e0b",maintain:"#3b82f6"};
+  const modeLabels={deficit:"DEFICIT",surplus:"SURPLUS",maintain:"MANTENIMENTO"};
+  const modeIcons={deficit:"📉",surplus:"📈",maintain:"⚖️"};
+  const col=modeColors[goal.mode]||"#3b82f6";
+
+  return(
+    <div style={{...S.card,borderLeft:`3px solid ${col}`}}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:16}}>{modeIcons[goal.mode]||"⚖️"}</span>
+          <div>
+            <p style={{margin:0,fontSize:9,letterSpacing:2,color:col}}>{modeLabels[goal.mode]||"OBIETTIVO"} CALORICO</p>
+            {kcalTarget&&<p style={{margin:0,fontSize:13,fontWeight:900,color:C.text}}>{kcalTarget} kcal/giorno</p>}
+          </div>
+        </div>
+        <button onClick={()=>{setEditing(v=>!v);setEditMode(goal.mode);setEditPct(goal.pct);setEditOverride(goal.kcalOverride||"");}}
+          style={{background:"none",border:"none",color:C.text3,cursor:"pointer",fontSize:12,padding:"0 4px"}}>✏</button>
+      </div>
+
+      {/* Form modifica */}
+      {editing&&(
+        <div style={{background:C.bg3,borderRadius:10,padding:"12px",marginBottom:12}}>
+          <p style={{margin:"0 0 10px",fontSize:8,letterSpacing:2,color:C.text3}}>CONFIGURA OBIETTIVO</p>
+          {/* Modalità */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:12}}>
+            {[["deficit","📉 Deficit","Perdi peso"],["maintain","⚖️ Mantieni","Ricomposizione"],["surplus","📈 Surplus","Metti massa"]].map(([m,label,sub])=>(
+              <button key={m} onClick={()=>setEditMode(m)} style={{padding:"10px 6px",borderRadius:8,border:`2px solid ${editMode===m?modeColors[m]:C.border2}`,background:editMode===m?modeColors[m]+"22":"transparent",cursor:"pointer",fontFamily:"inherit",textAlign:"center"}}>
+                <p style={{margin:"0 0 2px",fontSize:12,color:editMode===m?modeColors[m]:C.text3}}>{label}</p>
+                <p style={{margin:0,fontSize:8,color:C.text4}}>{sub}</p>
+              </button>
+            ))}
+          </div>
+          {/* % deficit/surplus */}
+          {editMode!=="maintain"&&(
+            <div style={{marginBottom:10}}>
+              <label style={S.lbl}>{editMode==="deficit"?"% deficit sul TDEE":"% surplus sul TDEE"}</label>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:6}}>
+                {(editMode==="deficit"?[10,15,20,25,30]:[5,10,15,20]).map(p=>(
+                  <button key={p} onClick={()=>setEditPct(p)} style={{padding:"6px 12px",borderRadius:6,border:`1px solid ${editPct===p?col:C.border2}`,background:editPct===p?col+"22":"transparent",color:editPct===p?col:C.text3,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:editPct===p?700:400}}>
+                    {p}%
+                  </button>
+                ))}
+              </div>
+              {tdeeForCalc&&<p style={{margin:0,fontSize:9,color:C.text3}}>
+                TDEE stimato: {tdeeForCalc} kcal → target: <strong style={{color:col}}>{getKcalTarget({mode:editMode,pct:editPct},tdeeForCalc,bmrVal)} kcal</strong>
+                {editMode==="deficit"&&<span style={{color:"#f59e0b"}}> ({kcalToKg((tdeeForCalc-getKcalTarget({mode:editMode,pct:editPct},tdeeForCalc,bmrVal))*7)}kg/sett stimati)</span>}
+              </p>}
+            </div>
+          )}
+          {/* Override manuale */}
+          <div style={{marginBottom:10}}>
+            <label style={S.lbl}>Oppure imposta valore fisso (kcal) — sovrascrive il calcolo</label>
+            <input type="number" inputMode="numeric" style={S.inp} placeholder={tdeeForCalc?`es. ${getKcalTarget({mode:editMode,pct:editPct},tdeeForCalc,bmrVal)||2000}`:"es. 1800"} value={editOverride} onChange={e=>setEditOverride(e.target.value)}/>
+            {editOverride&&bmrVal&&parseInt(editOverride)<bmrVal&&<p style={{margin:"4px 0 0",fontSize:9,color:"#ef4444"}}>⚠ Sotto il BMR ({bmrVal} kcal) — non raccomandato senza supervisione medica.</p>}
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button style={{...S.btn("red"),flex:1,padding:11}} onClick={saveGoal}>💾 SALVA</button>
+            <button style={{...S.btn("ghost"),padding:11}} onClick={()=>setEditing(false)}>Annulla</button>
+          </div>
+        </div>
+      )}
+
+      {/* Oggi */}
+      {kcalTarget&&!editing&&(
+        <>
+          {/* Kcal rimanenti oggi */}
+          <div style={{marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+              <span style={{fontSize:9,color:C.text3}}>Oggi — {todayData.kcalIn||0} / {kcalTarget} kcal</span>
+              <span style={{fontSize:11,fontWeight:700,color:todayRemaining>=0?col:"#ef4444"}}>
+                {todayRemaining!=null?(todayRemaining>=0?`${todayRemaining} rimanenti`:`+${Math.abs(todayRemaining)} oltre target`):"—"}
+              </span>
+            </div>
+            <div style={{height:8,borderRadius:4,background:C.bg4,overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${Math.min((todayData.kcalIn||0)/kcalTarget*100,100)}%`,
+                background:todayData.kcalIn>kcalTarget?"#ef4444":col,borderRadius:4,transition:"width 0.5s"}}/>
+            </div>
+            {/* Avviso sotto BMR */}
+            {belowBMR&&<div style={{marginTop:6,background:"#ef444418",borderRadius:6,padding:"5px 10px",display:"flex",gap:6,alignItems:"center"}}>
+              <span style={{fontSize:11}}>⚠️</span>
+              <p style={{margin:0,fontSize:9,color:"#ef4444"}}>Stai mangiando sotto il tuo BMR ({bmrVal} kcal) — rischio perdita di massa muscolare.</p>
+            </div>}
+          </div>
+
+          {/* Settimana: barre giornaliere */}
+          <div style={{marginBottom:10}}>
+            <p style={{margin:"0 0 6px",fontSize:8,letterSpacing:2,color:C.text3}}>QUESTA SETTIMANA ({daysLogged}/7 giorni registrati)</p>
+            <div style={{display:"flex",gap:3,alignItems:"flex-end"}}>
+              {weekData.map(({d,kcalIn,vsTarget,isToday})=>{
+                const pct=kcalIn&&kcalTarget?Math.min(kcalIn/kcalTarget,1.3):0;
+                const over=kcalIn>kcalTarget;
+                const barH=Math.max(pct*52,2);
+                const barCol=!kcalIn?C.bg4:over?"#ef4444":col;
+                const dl=["L","M","M","G","V","S","D"][(new Date(d).getDay()+6)%7];
+                return(
+                  <div key={d} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                    {kcalIn&&<span style={{fontSize:7,color:over?"#ef4444":C.text4}}>{kcalIn>999?`${(kcalIn/1000).toFixed(1)}k`:kcalIn}</span>}
+                    <div style={{width:"100%",height:52,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
+                      <div style={{width:"100%",height:barH,background:barCol,borderRadius:3,opacity:isToday?1:0.75}}/>
+                    </div>
+                    {/* linea target */}
+                    <span style={{fontSize:7,color:isToday?"#ef4444":C.text4,fontWeight:isToday?700:400}}>{dl}</span>
+                  </div>
+                );
+              })}
+            </div>
+            {/* linea target visiva */}
+            <div style={{position:"relative",height:1,background:col+"60",marginTop:-56,marginBottom:56,pointerEvents:"none"}}>
+              <span style={{position:"absolute",right:0,top:-8,fontSize:7,color:col}}>target</span>
+            </div>
+          </div>
+
+          {/* Deficit/surplus accumulato settimana */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+            <div style={{background:C.bg3,borderRadius:8,padding:"8px 6px",textAlign:"center"}}>
+              <p style={{margin:"0 0 2px",fontSize:7,color:C.text3,letterSpacing:1}}>ACCUMULATO 7GG</p>
+              <p style={{margin:0,fontSize:14,fontWeight:900,color:weekDeficit<=0?col:"#ef4444"}}>{weekDeficit>0?"+":""}{weekDeficit}</p>
+              <p style={{margin:0,fontSize:7,color:C.text4}}>kcal vs target</p>
+            </div>
+            <div style={{background:C.bg3,borderRadius:8,padding:"8px 6px",textAlign:"center"}}>
+              <p style={{margin:"0 0 2px",fontSize:7,color:C.text3,letterSpacing:1}}>EQUIVALE A</p>
+              <p style={{margin:0,fontSize:14,fontWeight:900,color:weekDeficit<=0?col:"#ef4444"}}>{weekDeficit<=0?"-":"+"}~{weekDeficitKg}kg</p>
+              <p style={{margin:0,fontSize:7,color:C.text4}}>grasso stimato</p>
+            </div>
+            <div style={{background:C.bg3,borderRadius:8,padding:"8px 6px",textAlign:"center"}}>
+              <p style={{margin:"0 0 2px",fontSize:7,color:C.text3,letterSpacing:1}}>PROIEZIONE</p>
+              <p style={{margin:0,fontSize:14,fontWeight:900,color:projKgPerWeek&&projKgPerWeek<0?col:"#ef4444"}}>
+                {projKgPerWeek!=null?(projKgPerWeek<0?`${projKgPerWeek}`:projKgPerWeek>0?`+${projKgPerWeek}`:"0"):"—"}
+              </p>
+              <p style={{margin:0,fontSize:7,color:C.text4}}>kg/settimana</p>
+            </div>
+          </div>
+
+          {/* TDEE info */}
+          {tdeeForCalc&&<p style={{margin:0,fontSize:8,color:C.text4}}>
+            TDEE base: {tdeeForCalc} kcal
+            {avgTdee?` (media ${tdeeValues.length} giorni)`:` (stima da BMR)`}
+            {goal.kcalOverride?" · target fisso impostato manualmente":""}
+          </p>}
+        </>
+      )}
+
+      {!kcalTarget&&!editing&&(
+        <p style={{fontSize:10,color:C.text3}}>
+          {tdeeForCalc?`TDEE stimato: ${tdeeForCalc} kcal — configura un obiettivo con ✏`:"Inserisci il TDEE manuale o registra allenamenti per stimare il TDEE."}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function BwGoalCard({bwEntries,lastBw,C,S}){
   const [bwGoal,setBwGoalState]=useState(()=>db(BW_GOAL_KEY)||"");
   const [editGoal,setEditGoal]=useState(false);
@@ -2607,6 +2833,24 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
               {(selGymKcal>0||selActs.length>0||selTdeeManual)&&(
                 <ActivityBurnRow acts={selActs} gymKcal={selGymKcal} tdeeManual={selTdeeManual} C={C}/>
               )}
+              {/* Kcal rimanenti rispetto all'obiettivo */}
+              {(()=>{
+                const kcalGoal=db(KCAL_GOAL_KEY);
+                if(!kcalGoal||!selKcalIn)return null;
+                const tdeeApprox=selKcalOut||(db("il_height")&&bwKg?Math.round(calcBMR(bwKg,parseInt(db("il_height"))||175,30,true)*1.5):null);
+                const bmrApprox=bwKg?calcBMR(bwKg,parseInt(db("il_height"))||175,30,true):null;
+                const target=getKcalTarget(kcalGoal,tdeeApprox,bmrApprox);
+                if(!target)return null;
+                const remaining=target-selKcalIn;
+                const over=remaining<0;
+                const modeCol={deficit:"#10b981",surplus:"#f59e0b",maintain:"#3b82f6"}[kcalGoal.mode]||"#3b82f6";
+                return(
+                  <div style={{marginTop:8,display:"flex",alignItems:"center",justifyContent:"space-between",background:over?"#ef444414":modeCol+"14",borderRadius:8,padding:"6px 12px",border:`1px solid ${over?"#ef444430":modeCol+"30"}`}}>
+                    <span style={{fontSize:9,color:C.text3}}>Obiettivo: {target} kcal</span>
+                    <span style={{fontSize:12,fontWeight:900,color:over?"#ef4444":modeCol}}>{over?`+${Math.abs(remaining)} oltre`:`${remaining} rimanenti`}</span>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Macro breakdown */}
@@ -2712,6 +2956,9 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
         {/* ── TAB TREND ── */}
         {tab==="settimana"&&(
           <div className="fade-up">
+            {/* Obiettivo calorico */}
+            <KcalGoalPanel nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} actEntries={actEntries} sessions={sessions||[]} bwEntries={bwEntries} C={C} S={S}/>
+
             {/* Protein streak */}
             <div style={S.card}>
               <ProtStreak nutrEntries={nutrEntries} bwKg={bwKg} C={C}/>
@@ -4568,7 +4815,7 @@ function GymTracker(){
   const csvRow=(...cols)=>cols.map(c=>{const s=String(c??'');return s.includes(',')||s.includes('"')||s.includes('\n')?`"${s.replace(/"/g,'""')}"`:`${s}`;}).join(',')+'\n';
 
   const exportAllJSON=()=>{
-    const payload={exportDate:todayISO(),version:2,program,sessions,bwEntries,nutrEntries,actEntries,tdeeEntries,goals};
+    const payload={exportDate:todayISO(),version:2,program,sessions,bwEntries,nutrEntries,actEntries,tdeeEntries,goals,kcalGoal:db(KCAL_GOAL_KEY)||null};
     dl(JSON.stringify(payload,null,2),`ironlog_backup_${todayISO()}.json`,"application/json");
     notify("Backup JSON esportato ✓");
   };
@@ -4622,6 +4869,7 @@ function GymTracker(){
         if(data.actEntries&&typeof data.actEntries==='object'){setActEntries(data.actEntries);db(ACT_KEY,data.actEntries);}
         if(data.tdeeEntries&&typeof data.tdeeEntries==='object'){setTdeeEntries(data.tdeeEntries);db(TDEE_KEY,data.tdeeEntries);}
         if(data.goals&&typeof data.goals==='object'){setGoals(data.goals);db(GOALS_KEY,data.goals);}
+        if(data.kcalGoal&&typeof data.kcalGoal==='object'){db(KCAL_GOAL_KEY,data.kcalGoal);}
         notify("Dati importati con successo ✓","#10b981");
       }catch(_){notify("Errore: file non valido","#ef4444");}
     };
