@@ -247,7 +247,7 @@ function HeatmapChart({sessions,actEntries,C}){
   const cells=[];
   for(let i=363;i>=0;i--){
     const d=new Date(today);d.setDate(d.getDate()-i);
-    cells.push({iso:d.toISOString().slice(0,10),day:d.getDay(),week:Math.floor(i/7)});
+    cells.push({iso:localISO(d),day:d.getDay(),week:Math.floor(i/7)});
   }
   const countMap={};
   sessions.forEach(s=>{countMap[s.date]=(countMap[s.date]||0)+1;});
@@ -284,7 +284,7 @@ function HeatmapChart({sessions,actEntries,C}){
                   const cnt=cell?countMap[cell.iso]||0:0;
                   const haActs=cell?actMap[cell.iso]||0:0;
                   const alpha=cnt===0?0.06:0.15+(cnt/maxCount)*0.85;
-                  const isToday=cell?.iso===today.toISOString().slice(0,10);
+                  const isToday=cell?.iso===localISO(today);
                   // colore: rosso per palestra, verde per solo attività
                   const bg=cnt>0?`rgba(239,68,68,${alpha})`:haActs>0?`rgba(16,185,129,0.4)`:C.bg4;
                   return(
@@ -522,7 +522,7 @@ function ConsistencyBar({sessions,C}){
   for(let w=7;w>=0;w--){
     const start=new Date();start.setDate(start.getDate()-start.getDay()+1-(w*7));
     const end=new Date(start);end.setDate(start.getDate()+6);
-    const s0=start.toISOString().slice(0,10),e0=end.toISOString().slice(0,10);
+    const s0=localISO(start),e0=localISO(end);
     const cnt=sessions.filter(s=>s.date>=s0&&s.date<=e0).length;
     weeks.push({cnt,label:w===0?"Questa":w===1?"Scorsa":`-${w}s`});
   }

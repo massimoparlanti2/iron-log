@@ -41,6 +41,8 @@ Poi visita `http://localhost:8080`.
 
 I dati restano nel browser, in `localStorage`, usando chiavi che iniziano con `il_`.
 Il backup JSON esporta sia i dati principali sia le preferenze locali compatibili.
+Le date vengono salvate in formato locale `YYYY-MM-DD`, evitando slittamenti di giorno
+vicino a mezzanotte.
 
 ## Note
 

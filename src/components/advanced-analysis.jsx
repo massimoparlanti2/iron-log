@@ -571,7 +571,7 @@ function CarbCyclingCard({nutrEntries,sessions,bwEntries,actEntries,C,S}){
   const trainDates=new Set(sessions.map(s=>s.date));
   const lastDays=Array.from({length:7},(_,i)=>{
     const d=new Date();d.setDate(d.getDate()-i);
-    return d.toISOString().slice(0,10);
+    return localISO(d);
   }).reverse();
 
   return(
@@ -606,7 +606,7 @@ function CarbCyclingCard({nutrEntries,sessions,bwEntries,actEntries,C,S}){
           {lastDays.map(d=>{
             const isTrain=trainDates.has(d);
             const dow=["L","M","M","G","V","S","D"][(new Date(d).getDay()+6)%7];
-            const isToday=d===new Date().toISOString().slice(0,10);
+            const isToday=d===todayISO();
             return(
               <div key={d} style={{flex:1,textAlign:"center"}}>
                 <div style={{width:"100%",paddingBottom:"100%",borderRadius:8,position:"relative",

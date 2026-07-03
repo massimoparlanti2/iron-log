@@ -25,7 +25,7 @@ function WeekSummary({sessions,setSessions,nutrEntries,setNutrEntries,actEntries
   const dl=["Lun","Mar","Mer","Gio","Ven","Sab","Dom"];
 
   const wkData=days.map((d,i)=>{
-    const ds=d.toISOString().slice(0,10);
+    const ds=localISO(d);
     const daySess=sessions.filter(s=>s.date===ds);
     const nutr=nutrEntries[ds];
     const acts=actEntries[ds]||[];
@@ -75,7 +75,7 @@ function WeekSummary({sessions,setSessions,nutrEntries,setNutrEntries,actEntries
         <p style={{margin:0,fontSize:9,letterSpacing:2,color:C.text3}}>RESOCONTO SETTIMANALE</p>
         <div style={{display:"flex",gap:4,alignItems:"center"}}>
           <button onClick={()=>{setOffset(o=>o-1);setSelDay(null);}} style={{background:"none",border:"none",color:C.text2,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>‹</button>
-          <span style={{fontSize:9,color:C.text3}}>{offset===0?"Questa sett.":offset===-1?"Sett. scorsa":weekLabel(days[0].toISOString().slice(0,10))}</span>
+          <span style={{fontSize:9,color:C.text3}}>{offset===0?"Questa sett.":offset===-1?"Sett. scorsa":weekLabel(localISO(days[0]))}</span>
           <button onClick={()=>{setOffset(o=>Math.min(o+1,0));setSelDay(null);}} style={{background:"none",border:"none",color:offset===0?C.text4:C.text2,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>›</button>
         </div>
       </div>

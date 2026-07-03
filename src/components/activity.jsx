@@ -10,8 +10,8 @@ function WeekCalendar({sessions,program,actEntries,C,offset,setOffset}){
   const dayColorMap={};
   (program?.days||[]).forEach((d,i)=>{dayColorMap[d.name]=d.color||DAY_COLORS[i%DAY_COLORS.length];});
   const dl=["L","M","M","G","V","S","D"];
-  const d0=days[0].toISOString().slice(0,10);
-  const d6=days[6].toISOString().slice(0,10);
+  const d0=localISO(days[0]);
+  const d6=localISO(days[6]);
   const wkSess=sessions.filter(s=>s.date>=d0&&s.date<=d6);
   const wkVol=Math.round(wkSess.reduce((t,s)=>t+sessionVol(s),0));
   const wkKcalGym=wkSess.reduce((t,s)=>t+(s.kcal||0),0);
@@ -30,7 +30,7 @@ function WeekCalendar({sessions,program,actEntries,C,offset,setOffset}){
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
         {days.map((d,i)=>{
-          const ds=d.toISOString().slice(0,10);
+          const ds=localISO(d);
           const daySess=sessMap[ds]||[];
           const dayActs=actEntries?.[ds]||[];
           const trained=daySess.length>0;

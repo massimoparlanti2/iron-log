@@ -33,8 +33,8 @@ const BADGES=[
   {id:"multi_sport",  name:"Multisport",     icon:"🎯", desc:"3 sport diversi in una settimana",  check:(_,_s,a)=>{
     const today=new Date(),dow=today.getDay()||7;
     const mon=new Date(today);mon.setDate(today.getDate()-dow+1);
-    const monISO=mon.toISOString().slice(0,10);
-    const sunISO=(()=>{const d=new Date(mon);d.setDate(d.getDate()+6);return d.toISOString().slice(0,10);})();
+    const monISO=localISO(mon);
+    const sunISO=(()=>{const d=new Date(mon);d.setDate(d.getDate()+6);return localISO(d);})();
     const thisWeekTypes=new Set(Object.entries(a||{}).filter(([d])=>d>=monISO&&d<=sunISO).flatMap(([,acts])=>acts.map(x=>x.type)));
     return thisWeekTypes.size>=3;
   }},
@@ -79,9 +79,9 @@ function get1RMHistory(exName,sessions){
 function getVolumeByMuscleByWeek(sessions){
   const weeks={};
   sessions.forEach(s=>{
-    const d=new Date(s.date),day=d.getDay()||7;
+    const d=dateFromISO(s.date),day=d.getDay()||7;
     d.setDate(d.getDate()+1-day);
-    const wk=d.toISOString().slice(0,10);
+    const wk=localISO(d);
     if(!weeks[wk])weeks[wk]={};
     s.exercises.forEach(e=>{
       if(!weeks[wk][e.muscle])weeks[wk][e.muscle]=0;
@@ -110,7 +110,7 @@ function calcFaticaIndex(sessions,actEntries){
   const vol7=[],vol28=[];
   for(let i=0;i<28;i++){
     const d=new Date(today);d.setDate(d.getDate()-i);
-    const iso=d.toISOString().slice(0,10);
+    const iso=localISO(d);
     const daySess=sessions.filter(s=>s.date===iso);
     let v=daySess.reduce((t,s)=>t+sessionVol(s),0);
     // aggiungi "stress equivalente" per attività extra (stima: 30min = ~1000 unità di volume)
@@ -275,7 +275,7 @@ function calcNutrScore(date, nutrEntries, tdeeEntries, bwKg, actEntries, session
     score+=macroScore;
   } else score+=10;
   // 4. Consistenza (15pt) — quanti giorni registrati nell'ultima settimana
-  const last7=Array.from({length:7},(_,i)=>{const d=new Date(date);d.setDate(d.getDate()-i);return d.toISOString().slice(0,10);});
+  const last7=Array.from({length:7},(_,i)=>{const d=dateFromISO(date);d.setDate(d.getDate()-i);return localISO(d);});
   const loggedDays=last7.filter(d=>nutrEntries[d]?.kcal>0).length;
   score+=Math.round(loggedDays/7*15);
   return Math.min(100,score);
@@ -627,12 +627,13 @@ function getBodyRatios(weightKg, heightCm, waistCm, hipCm, shoulderCm) {
 function getNutrPerfCorrelation(sessions, nutrEntries) {
   // Match sessions with nutrition data from same/previous day
   const paired = sessions
-    .filter(s => nutrEntries[s.date] || nutrEntries[
-      new Date(new Date(s.date)-86400000).toISOString().slice(0,10)
-    ])
+    .filter(s => {
+      const prev=dateFromISO(s.date);prev.setDate(prev.getDate()-1);
+      return nutrEntries[s.date]||nutrEntries[localISO(prev)];
+    })
     .map(s => {
-      const n = nutrEntries[s.date] ||
-        nutrEntries[new Date(new Date(s.date)-86400000).toISOString().slice(0,10)];
+      const prev=dateFromISO(s.date);prev.setDate(prev.getDate()-1);
+      const n = nutrEntries[s.date] || nutrEntries[localISO(prev)];
       const vol = sessionVol(s);
       const avgScore = s.exercises.filter(e=>e.score>0).length
         ? s.exercises.filter(e=>e.score>0).reduce((t,e)=>t+e.score,0) /
@@ -719,7 +720,21 @@ function db(k,v){
   catch(e){if((e.name==='QuotaExceededError'||e.code===22)&&!window._qlWarn){window._qlWarn=true;setTimeout(()=>alert('⚠️ Iron Log: spazio quasi esaurito!\nEsporta un backup JSON e rimuovi dati vecchi per liberare spazio.'),200);}}
   try{window.dispatchEvent(new CustomEvent("ironlog:datachange",{detail:{key:k,value:v}}));}catch(_){}
 }
-function todayISO(){return new Date().toISOString().slice(0,10);}
+function dateFromISO(iso){
+  if(typeof iso==="string"&&/^\d{4}-\d{2}-\d{2}/.test(iso)){
+    const [y,m,d]=iso.slice(0,10).split("-").map(Number);
+    return new Date(y,m-1,d);
+  }
+  return new Date(iso);
+}
+function localISO(input=new Date()){
+  const d=input instanceof Date?input:dateFromISO(input);
+  const y=d.getFullYear();
+  const m=String(d.getMonth()+1).padStart(2,"0");
+  const day=String(d.getDate()).padStart(2,"0");
+  return`${y}-${m}-${day}`;
+}
+function todayISO(){return localISO(new Date());}
 function fmtDur(m){if(!m)return"—";const h=Math.floor(m/60),r=m%60;return h?`${h}h ${r}m`:`${m}min`;}
 function sessionVol(s){return s.exercises.reduce((t,e)=>t+(e.sets||1)*e.reps*e.weight,0);}
 function oneRM(w,r){return r<=1?w:Math.round(w*(1+r/30));}
@@ -733,7 +748,7 @@ function getRecords(sessions){
   return r;
 }
 function getStreak(sessions,actEntries){
-  const toWeek=d=>{const dt=new Date(d),day=dt.getDay()||7;dt.setDate(dt.getDate()+1-day);return dt.toISOString().slice(0,10);};
+  const toWeek=d=>{const dt=dateFromISO(d),day=dt.getDay()||7;dt.setDate(dt.getDate()+1-day);return localISO(dt);};
   const activeDates=[...sessions.map(s=>s.date),...Object.keys(actEntries||{})];
   if(!activeDates.length)return 0;
   const weeks=[...new Set(activeDates.sort().reverse().map(toWeek))];
@@ -747,14 +762,14 @@ function getWeekDays(offset=0){
 function groupByWeek(sessions){
   const weeks={};
   sessions.forEach(s=>{
-    const d=new Date(s.date),day=d.getDay()||7;
-    d.setDate(d.getDate()+1-day);const wk=d.toISOString().slice(0,10);
+    const d=dateFromISO(s.date),day=d.getDay()||7;
+    d.setDate(d.getDate()+1-day);const wk=localISO(d);
     if(!weeks[wk])weeks[wk]=[];weeks[wk].push(s);
   });
   return Object.entries(weeks).sort((a,b)=>b[0].localeCompare(a[0]));
 }
 function weekLabel(isoMon){
-  const d=new Date(isoMon),sun=new Date(d);sun.setDate(d.getDate()+6);
+  const d=dateFromISO(isoMon),sun=new Date(d);sun.setDate(d.getDate()+6);
   return`${d.getDate()}/${d.getMonth()+1} – ${sun.getDate()}/${sun.getMonth()+1}`;
 }
 

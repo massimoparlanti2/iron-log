@@ -1,7 +1,7 @@
 // ── NUTR TREND CHART ──
 function NutrChart({nutrEntries,C}){
   const [metric,setMetric]=useState("kcal");
-  const days=[];for(let i=29;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days.push(d.toISOString().slice(0,10));}
+  const days=[];for(let i=29;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days.push(localISO(d));}
   const raw=days.map(date=>{const n=nutrEntries[date];return n?{date,v:metric==="kcal"?n.kcal:metric==="prot"?n.prot:metric==="carb"?n.carb:n.fat}:null;}).filter(Boolean);
   const metrics=[["kcal","🔥 Calorie","#f97316"],["prot","🥩 Proteine","#ef4444"],["carb","🍞 Carboidrati","#f59e0b"],["fat","🧈 Grassi","#3b82f6"]];
   const cur=metrics.find(m=>m[0]===metric);
@@ -102,7 +102,7 @@ function BodyChart({bwEntries,C}){
 function SurplusChart({nutrEntries,tdeeEntries,C}){
   // Build last 14 days of data
   const days=[];
-  for(let i=13;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days.push(d.toISOString().slice(0,10));}
+  for(let i=13;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days.push(localISO(d));}
   const data=days.map(date=>{
     const kcalIn=nutrEntries[date]?.kcal||null;
     const kcalOut=tdeeEntries[date]||null;
@@ -242,7 +242,7 @@ function ActivityBurnRow({acts,gymKcal,tdeeManual,C}){
 // ── 14-day calorie timeline ──
 function CalTimeline({nutrEntries,tdeeEntries,actEntries,sessions,C}){
   const days=[];
-  for(let i=13;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days.push(d.toISOString().slice(0,10));}
+  for(let i=13;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days.push(localISO(d));}
   const data=days.map(date=>{
     const n=nutrEntries[date];
     const acts=actEntries[date]||[];
@@ -303,7 +303,7 @@ function CalTimeline({nutrEntries,tdeeEntries,actEntries,sessions,C}){
 function ProtStreak({nutrEntries,bwKg,C}){
   const target=bwKg?Math.round(bwKg*1.8):140;
   const days=[];
-  for(let i=6;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days.push(d.toISOString().slice(0,10));}
+  for(let i=6;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days.push(localISO(d));}
   const streak=days.map(date=>{
     const n=nutrEntries[date];
     const ok=n&&n.prot>=target*0.9;
@@ -353,7 +353,7 @@ function KcalGoalPanel({nutrEntries,tdeeEntries,actEntries,sessions,bwEntries,C,
 
   // Calcola TDEE medio degli ultimi 7 giorni disponibili
   const today=todayISO();
-  const last7=Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-i);return d.toISOString().slice(0,10);});
+  const last7=Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-i);return localISO(d);});
   const tdeeValues=last7.map(d=>{
     if(tdeeEntries[d]) return tdeeEntries[d];
     const acts=actEntries[d]||[];
@@ -916,8 +916,8 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
   const isToday=selDate===today;
 
   // navigate days
-  const prevDay=()=>{const d=new Date(selDate);d.setDate(d.getDate()-1);changeDate(d.toISOString().slice(0,10));};
-  const nextDay=()=>{const d=new Date(selDate);d.setDate(d.getDate()+1);if(d.toISOString().slice(0,10)<=today)changeDate(d.toISOString().slice(0,10));};
+  const prevDay=()=>{const d=dateFromISO(selDate);d.setDate(d.getDate()-1);changeDate(localISO(d));};
+  const nextDay=()=>{const d=dateFromISO(selDate);d.setDate(d.getDate()+1);if(localISO(d)<=today)changeDate(localISO(d));};
 
   const tabs=[["giorno","📅 GIORNO"],["settimana","📊 TREND"],["peso","⚖ CORPO"]];
 

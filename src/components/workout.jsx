@@ -144,7 +144,7 @@ function WeekGroup({weekKey,weekSessions,program,actEntries,onDeleteSession,onEd
   const kcal=weekSessions.reduce((t,s)=>t+(s.kcal||0),0);
   const dur=weekSessions.reduce((t,s)=>t+(s.duration||0),0);
   // attività extra di questa settimana
-  const [wkStart,wkEnd]=[weekKey, (()=>{const d=new Date(weekKey);d.setDate(d.getDate()+6);return d.toISOString().slice(0,10);})()];
+  const [wkStart,wkEnd]=[weekKey, (()=>{const d=dateFromISO(weekKey);d.setDate(d.getDate()+6);return localISO(d);})()];
   const wkActs=Object.entries(actEntries||{}).filter(([d])=>d>=wkStart&&d<=wkEnd);
   const actKcal=wkActs.reduce((t,[,acts])=>t+acts.reduce((s,a)=>s+(a.kcal||0),0),0);
   const actMin=wkActs.reduce((t,[,acts])=>t+acts.reduce((s,a)=>s+(a.min||0),0),0);
@@ -152,7 +152,7 @@ function WeekGroup({weekKey,weekSessions,program,actEntries,onDeleteSession,onEd
   useEffect(()=>{
     const today=new Date(),dow=today.getDay()||7;
     const mon=new Date(today);mon.setDate(today.getDate()-dow+1);
-    if(weekKey===mon.toISOString().slice(0,10))setOpen(true);
+    if(weekKey===localISO(mon))setOpen(true);
   },[]);
   return(
     <div style={{...S.card,padding:0,overflow:"hidden"}}>

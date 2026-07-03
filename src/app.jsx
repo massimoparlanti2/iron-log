@@ -23,6 +23,7 @@ function GymTracker(){
   const [editingSession,setEditingSession]=useState(null);
   const [checkinData,setCheckinData]=useState(null);
   const [workoutTab,setWorkoutTab]=useState("oggi");
+  const [historyTab,setHistoryTab]=useState("grafici");
   const [viewProgramId,setViewProgramId]=useState(null);
   const sessionsRef=useRef([]);
 
@@ -550,7 +551,8 @@ function GymTracker(){
     const wkDelta=lastWVol>0?Math.round((thisWVol-lastWVol)/lastWVol*100):null;
 
     const HistoryInner=()=>{
-      const [htab,setHtab]=useState("grafici");
+      const htab=historyTab;
+      const setHtab=setHistoryTab;
       const htabs=[["profilo","👤"],["analisi","🧬"],["grafici","📈"],["esercizi","🏋"],["log","📋"]];
       return(
         <div>
