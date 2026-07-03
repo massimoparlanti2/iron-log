@@ -2,11 +2,14 @@
   "name": "Iron Log",
   "short_name": "Iron Log",
   "description": "Il tuo diario di allenamento personale",
-  "start_url": "./",
+  "id": "./",
+  "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#0a0a0a",
   "theme_color": "#0a0a0a",
   "orientation": "portrait",
+  "categories": ["health", "fitness", "productivity"],
   "icons": [
     {
       "src": "icon-192.png",

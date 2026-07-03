@@ -1,0 +1,21 @@
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+body{margin:0;padding:0;overscroll-behavior:none;}
+input[type=number]{-moz-appearance:textfield;}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;}
+button,select{-webkit-appearance:none;appearance:none;}
+::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-thumb{background:#333;border-radius:2px;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pop{0%{transform:translateX(-50%) scale(0.7);opacity:0}70%{transform:translateX(-50%) scale(1.1)}100%{transform:translateX(-50%) scale(1);opacity:1}}
+@keyframes drop{from{opacity:0;max-height:0}to{opacity:1;max-height:2000px}}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.7;transform:scale(1.04)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes confettiFall{0%{transform:translateY(-10px) rotate(0deg);opacity:1}100%{transform:translateY(100vh) rotate(720deg);opacity:0}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
+@keyframes glow{0%,100%{box-shadow:0 0 8px #ef444440}50%{box-shadow:0 0 22px #ef444480}}
+@keyframes barFill{from{width:0%}to{width:var(--target-w)}}
+.fade-up{animation:fadeUp 0.22s ease forwards;}
+.pr-pop{animation:pop 0.35s ease forwards;}
+.pulse-red{animation:pulse 2s infinite;}
+.shimmer-btn{background-size:200% auto;animation:shimmer 2.5s linear infinite;}
+.slide-right{animation:slideInRight 0.28s ease forwards;}
+.bar-animated{animation:barFill 0.7s ease forwards;}
