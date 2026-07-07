@@ -728,6 +728,7 @@ function GymTracker(){
 
             <TodaySnapshot sessions={sessions} nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} actEntries={actEntries} program={program} C={C} S={S}/>
             <DayScoreCard date={todayISO()} sessions={sessions} nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} bwEntries={bwEntries} actEntries={actEntries} C={C} S={S}/>
+            <DailyShareCard date={todayISO()} sessions={sessions} nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} bwEntries={bwEntries} actEntries={actEntries} C={C} S={S}/>
             <WeekSummary sessions={sessions} setSessions={(v)=>{updateSessions(v);db(SESS_KEY,v);}} nutrEntries={nutrEntries} setNutrEntries={(v)=>{setNutrEntries(v);db(NUTR_KEY,v);}} actEntries={actEntries} setActEntries={(v)=>{setActEntries(v);db(ACT_KEY,v);}} tdeeEntries={tdeeEntries} setTdeeEntries={(v)=>{setTdeeEntries(v);db(TDEE_KEY,v);}} program={program} C={C} S={S}/>
             {(()=>{const xp=calcXP(sessions,actEntries);const lv=getLevel(xp);const pct=getLevelProgress(xp);const unlockedCount=getUnlockedBadges(sessions,records,actEntries).length;return(
               <div style={{...S.card,marginTop:10,display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderLeft:`3px solid ${lv.color}`,background:`linear-gradient(135deg,${C.bg2},${C.bg3})`}}>

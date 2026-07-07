@@ -27,6 +27,13 @@ La chiave `il_programs` contiene l'archivio completo, mentre `il_active_program`
 contiene la scheda attiva. Ogni nuova sessione salva anche `programId`,
 `programName` e `dayColor`, cosi storico, calendario e programma restano coerenti.
 
+## Condivisione giornata
+
+Home e Fisico > Giorno includono una card per condividere le statistiche della
+data selezionata: allenamento, volume, durata, kcal bruciate, nutrizione,
+split macro, attivita extra, peso e score. Se la condivisione nativa non e
+disponibile, il riepilogo viene copiato negli appunti.
+
 ## Avvio locale
 
 Apri la cartella con un piccolo server statico:

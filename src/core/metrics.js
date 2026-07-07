@@ -714,6 +714,125 @@ function getDietQualityScore(nutrEntries, tdeeEntries, sessions, bwKg) {
   return {score:Math.min(score,100), grade, gradeColor, breakdown};
 }
 
+function getBodyWeightForDate(bwEntries,date){
+  const entries=[...(bwEntries||[])]
+    .filter(e=>e?.date&&e.w!=null&&e.date<=date)
+    .sort((a,b)=>a.date.localeCompare(b.date));
+  return entries.length?entries[entries.length-1]:null;
+}
+
+function getDailyMacroSplit(n){
+  if(!n)return null;
+  const prot=n.prot||0,carb=n.carb||0,fat=n.fat||0;
+  const total=prot*4+carb*4+fat*9;
+  if(!total)return null;
+  return{
+    prot:Math.round(prot*4/total*100),
+    carb:Math.round(carb*4/total*100),
+    fat:Math.round(fat*9/total*100)
+  };
+}
+
+function buildDailyShareStats(date,sessions,nutrEntries,tdeeEntries,actEntries,bwEntries){
+  const day=localISO(date);
+  const allSessions=sessions||[];
+  const daySessions=allSessions.filter(s=>s.date===day);
+  const nutrition=(nutrEntries||{})[day]||null;
+  const acts=(actEntries||{})[day]||[];
+  const bodyWeight=getBodyWeightForDate(bwEntries,day);
+  const bwKg=bodyWeight?.w||null;
+  const gymKcal=daySessions.reduce((t,s)=>t+(s.kcal||0),0);
+  const actKcal=acts.reduce((t,a)=>t+(a.kcal||0),0);
+  const manualOut=(tdeeEntries||{})[day]||null;
+  const heightCm=parseInt(db("il_height"))||175;
+  const bmr=bwKg?calcBMR(bwKg,heightCm,30,true):null;
+  const estimatedOut=!manualOut&&bmr?Math.round(bmr*1.3)+gymKcal+actKcal:null;
+  const activeOut=(gymKcal+actKcal)||null;
+  const kcalOut=manualOut||estimatedOut||activeOut;
+  const kcalOutMode=manualOut?"tracker":estimatedOut?"stima":activeOut?"attività":"";
+  const kcalIn=nutrition?.kcal||null;
+  const balance=kcalIn&&kcalOut?kcalIn-kcalOut:null;
+  const duration=daySessions.reduce((t,s)=>t+(s.duration||0),0);
+  const volume=daySessions.reduce((t,s)=>t+sessionVol(s),0);
+  const exercises=daySessions.flatMap(s=>(s.exercises||[]).map(e=>({...e,sessionName:s.dayName,programName:s.programName})));
+  const score=calcDayScore(day,nutrEntries||{},tdeeEntries||{},bwKg,actEntries||{},allSessions);
+  return{
+    date:day,
+    sessions:daySessions,
+    nutrition,
+    acts,
+    bodyWeight,
+    gymKcal,
+    actKcal,
+    kcalOut,
+    kcalOutMode,
+    kcalIn,
+    balance,
+    duration,
+    volume,
+    exercises,
+    macroSplit:getDailyMacroSplit(nutrition),
+    score,
+    hasAny:!!(daySessions.length||nutrition||acts.length||manualOut||bodyWeight)
+  };
+}
+
+function formatShareExercise(e){
+  const sets=e.sets||1;
+  const reps=e.reps||0;
+  const load=e.weight>0?`${e.weight}kg`:"BW";
+  const setText=sets>1?`${sets}x${reps}`:`${reps} rep`;
+  return `${e.name}: ${setText} @ ${load}`;
+}
+
+function formatDailyShareText(stats){
+  const lines=[`Iron Log - ${stats.date}`];
+  if(stats.score!==null&&stats.score!==undefined)lines.push(`Score giornata: ${stats.score}/100 (${scoreLabel(stats.score)})`);
+  if(stats.bodyWeight?.w)lines.push(`Peso: ${stats.bodyWeight.w} kg`);
+
+  if(stats.sessions.length){
+    const names=[...new Set(stats.sessions.map(s=>s.dayName).filter(Boolean))].join(", ");
+    const head=[`${stats.sessions.length} sessione${stats.sessions.length>1?"i":""}`];
+    if(names)head.push(names);
+    if(stats.duration)head.push(fmtDur(stats.duration));
+    if(stats.volume)head.push(`${Math.round(stats.volume).toLocaleString("it-IT")} kg volume`);
+    if(stats.gymKcal)head.push(`${stats.gymKcal} kcal`);
+    lines.push("");
+    lines.push(`Allenamento: ${head.join(" · ")}`);
+    const mainExercises=stats.exercises.filter(e=>e.name&&e.reps>0).slice(0,8);
+    if(mainExercises.length){
+      lines.push("Esercizi:");
+      mainExercises.forEach(e=>lines.push(`- ${formatShareExercise(e)}`));
+      if(stats.exercises.length>mainExercises.length)lines.push(`- +${stats.exercises.length-mainExercises.length} altri esercizi`);
+    }
+  }else{
+    lines.push("");
+    lines.push("Allenamento: riposo");
+  }
+
+  if(stats.nutrition){
+    const n=stats.nutrition;
+    const macro=stats.macroSplit;
+    lines.push("");
+    lines.push(`Nutrizione: ${n.kcal||0} kcal`);
+    lines.push(`Macro: P ${n.prot||0}g${macro?` (${macro.prot}%)`:""} · C ${n.carb||0}g${macro?` (${macro.carb}%)`:""} · F ${n.fat||0}g${macro?` (${macro.fat}%)`:""}`);
+  }
+
+  if(stats.kcalOut){
+    lines.push("");
+    lines.push(`Spesa calorica: ${stats.kcalOut} kcal${stats.kcalOutMode?` (${stats.kcalOutMode})`:""}`);
+    if(stats.balance!==null)lines.push(`Bilancio: ${stats.balance>0?"+":""}${stats.balance} kcal`);
+  }
+
+  if(stats.acts.length){
+    lines.push(`Attività extra: ${stats.acts.map(a=>`${a.type}${a.min?` ${a.min}min`:""}${a.kcal?` ${a.kcal}kcal`:""}`).join(", ")}`);
+  }
+
+  lines.push("");
+  lines.push("#IronLog");
+  return lines.join("\n");
+}
+
 function db(k,v){
   if(v===undefined){try{const x=localStorage.getItem(k);return x?JSON.parse(x):null;}catch(_){return null;}}
   try{localStorage.setItem(k,JSON.stringify(v));}

@@ -405,7 +405,7 @@ function PRHallOfFame({sessions,program,C,S}){
 // ── TODAY SNAPSHOT (Home) ──
 // ── DAY SCORE CARD ──
 function DayScoreCard({date,sessions,nutrEntries,tdeeEntries,bwEntries,actEntries,C,S}){
-  const bwKg=bwEntries.length?bwEntries[bwEntries.length-1].w:null;
+  const bwKg=getBodyWeightForDate(bwEntries,date)?.w||null;
   const daySess=sessions.filter(s=>s.date===date);
   const lastSess=daySess.length?daySess[daySess.length-1]:null;
   const wScore=lastSess?calcWorkoutScore(lastSess,sessions):null;
@@ -458,6 +458,79 @@ function DayScoreCard({date,sessions,nutrEntries,tdeeEntries,bwEntries,actEntrie
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function DailyShareCard({date,sessions,nutrEntries,tdeeEntries,bwEntries,actEntries,C,S}){
+  const [status,setStatus]=useState("");
+  const stats=buildDailyShareStats(date,sessions,nutrEntries,tdeeEntries,actEntries,bwEntries);
+  if(!stats.hasAny)return null;
+  const shareText=formatDailyShareText(stats);
+  const canNativeShare=typeof navigator!=="undefined"&&!!navigator.share;
+  const copyFallback=async()=>{
+    if(navigator.clipboard?.writeText){
+      await navigator.clipboard.writeText(shareText);
+      return true;
+    }
+    const el=document.createElement("textarea");
+    el.value=shareText;
+    el.setAttribute("readonly","");
+    el.style.position="fixed";
+    el.style.left="-9999px";
+    el.style.opacity="0";
+    document.body.appendChild(el);
+    el.select();
+    const ok=document.execCommand("copy");
+    document.body.removeChild(el);
+    if(!ok)throw new Error("copy-failed");
+    return true;
+  };
+  const handleShare=async()=>{
+    setStatus("");
+    try{
+      if(canNativeShare){
+        await navigator.share({title:`Iron Log ${stats.date}`,text:shareText});
+        setStatus("Condiviso ✓");
+      }else{
+        await copyFallback();
+        setStatus("Copiato ✓");
+      }
+      setTimeout(()=>setStatus(""),2200);
+    }catch(err){
+      if(err?.name==="AbortError")return;
+      try{
+        await copyFallback();
+        setStatus("Copiato ✓");
+        setTimeout(()=>setStatus(""),2200);
+      }catch(_){
+        setStatus("Non riuscito");
+      }
+    }
+  };
+  const macro=stats.macroSplit;
+  const workoutValue=stats.volume?`${Math.round(stats.volume).toLocaleString("it-IT")} kg`:stats.sessions.length?`${stats.sessions.length} sessione${stats.sessions.length>1?"i":""}`:"Riposo";
+  const workoutSub=stats.duration?fmtDur(stats.duration):(stats.sessions[0]?.dayName||"");
+  const outValue=stats.kcalOut?`${stats.kcalOut} kcal`:"—";
+  const outSub=stats.kcalOutMode||"spesa";
+  const carbValue=macro?`${macro.carb}%`:"—";
+  const carbSub=stats.nutrition?`${stats.nutrition.carb||0}g carbo`:"split";
+  return(
+    <div style={{...S.card,marginBottom:10,borderLeft:"3px solid #10b981",background:`linear-gradient(135deg,${C.bg2},${C.bg3})`}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10}}>
+        <p style={{margin:0,fontSize:8,letterSpacing:2,color:C.text3}}>📤 CONDIVIDI GIORNATA — {stats.date}</p>
+        {status&&<span style={{fontSize:9,fontWeight:800,color:status==="Non riuscito"?"#ef4444":"#10b981",whiteSpace:"nowrap"}}>{status}</span>}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:7,marginBottom:10}}>
+        {[["🏋",workoutValue,workoutSub,"#ef4444"],["🔥",outValue,outSub,"#f97316"],["🍞",carbValue,carbSub,"#f59e0b"]].map(([icon,value,sub,col])=>(
+          <div key={icon} style={{background:col+"14",border:`1px solid ${col}33`,borderRadius:8,padding:"8px 6px",minWidth:0}}>
+            <p style={{margin:"0 0 4px",fontSize:13,lineHeight:1}}>{icon}</p>
+            <p style={{margin:"0 0 2px",fontSize:12,fontWeight:900,color:col,lineHeight:1.15,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{value}</p>
+            <p style={{margin:0,fontSize:7,color:C.text4,lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sub}</p>
+          </div>
+        ))}
+      </div>
+      <button onClick={handleShare} style={{...S.btn("red"),width:"100%",padding:"11px 12px",fontSize:11}}>📤 CONDIVIDI</button>
     </div>
   );
 }

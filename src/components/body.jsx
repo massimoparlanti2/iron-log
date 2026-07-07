@@ -944,6 +944,8 @@ function FisicoScreen({C,S,bwEntries,setBwEntries,nutrEntries,setNutrEntries,act
               <button onClick={nextDay} style={{background:"none",border:"none",color:selDate>=today?C.text4:C.text2,fontSize:22,cursor:"pointer",padding:"0 8px",lineHeight:1}}>›</button>
             </div>
 
+            <DailyShareCard date={selDate} sessions={sessions||[]} nutrEntries={nutrEntries} tdeeEntries={tdeeEntries} bwEntries={bwEntries} actEntries={actEntries} C={C} S={S}/>
+
             {/* Bilancio calorico unificato */}
             <div style={{...S.card,marginBottom:10}}>
               <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:12}}>
